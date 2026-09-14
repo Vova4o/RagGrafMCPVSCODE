@@ -1,0 +1,10 @@
+.gitignore
+.vscodeignore
+bin/*
+!bin/darwin-arm64/
+!bin/darwin-arm64/codebase-graph-mcp
+dist/
+node_modules/
+scripts/
+test/
+package-lock.json

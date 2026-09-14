@@ -1,0 +1,27 @@
+{
+  "name": "codebase-graph",
+  "version": "0.2.4+codex.20260914165723",
+  "description": "Prefer shared multi-language code graphs for navigation before broad text search",
+  "author": {
+    "name": "Vladimir Gavrilenko"
+  },
+  "mcpServers": "./.mcp.json",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Codebase Graph",
+    "shortDescription": "Shared repository and workspace code graphs",
+    "longDescription": "Guides agents to use shared repository and workspace graphs first for code navigation, architecture, dependencies, callers, and impact analysis, while retaining text search for exact literals.",
+    "developerName": "Vladimir Gavrilenko",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Read",
+      "Code analysis"
+    ],
+    "defaultPrompt": [
+      "Prepare code context for this workspace",
+      "Trace callers of a function",
+      "Show dependencies between repositories"
+    ],
+    "brandColor": "#2563EB"
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "name": "codebase-graph",
+  "displayName": "Codebase Graph",
+  "description": "Shared multi-language repository graphs plus one aggregate workspace graph for coding agents.",
+  "version": "0.2.4",
+  "publisher": "vladimirgavrilenko",
+  "license": "SEE LICENSE IN LICENSE",
+  "private": true,
+  "engines": {
+    "vscode": "^1.102.0"
+  },
+  "categories": [
+    "Machine Learning",
+    "Other"
+  ],
+  "keywords": [
+    "mcp",
+    "code graph",
+    "multi-language",
+    "copilot",
+    "agents"
+  ],
+  "main": "./extension.js",
+  "extensionKind": [
+    "workspace"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:codebaseGraph.indexRepository",
+    "onCommand:codebaseGraph.showStatus",
+    "onCommand:codebaseGraph.openGraph"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "The extension starts a local MCP executable that reads supported source files in the workspace."
+    }
+  },
+  "contributes": {
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "codebaseGraph.repositories",
+        "label": "Codebase Graph"
+      }
+    ],
+    "commands": [
+      {
+        "command": "codebaseGraph.indexRepository",
+        "title": "Index Workspace",
+        "category": "Codebase Graph"
+      },
+      {
+        "command": "codebaseGraph.showStatus",
+        "title": "Show Index Status",
+        "category": "Codebase Graph"
+      },
+      {
+        "command": "codebaseGraph.openGraph",
+        "title": "Open Workspace Graph",
+        "category": "Codebase Graph"
+      }
+    ]
+  },
+  "scripts": {
+    "build:binary": "node scripts/build-binary.js",
+    "test": "npm run build:binary && node --test",
+    "vscode:prepublish": "npm run build:binary",
+    "package:local": "npm test && vsce package --allow-missing-repository --target darwin-arm64 --out dist/codebase-graph-vscode-darwin-arm64.vsix"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "3.9.2"
+  }
+}

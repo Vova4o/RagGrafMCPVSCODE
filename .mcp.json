@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "codebase-graph": {
+      "command": "./bin/codebase-graph-mcp",
+      "args": [],
+      "cwd": "."
+    }
+  }
+}

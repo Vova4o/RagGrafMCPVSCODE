@@ -1,0 +1,5 @@
+{
+  "$schema": "https://antigravity.google/schemas/v1/plugin.json",
+  "name": "codebase-graph",
+  "description": "Prefer shared multi-language code graphs for navigation before broad text search."
+}

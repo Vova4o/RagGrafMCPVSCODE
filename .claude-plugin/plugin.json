@@ -1,0 +1,8 @@
+{
+  "name": "codebase-graph",
+  "description": "Prefer shared multi-language code graphs for navigation before broad text search.",
+  "version": "0.2.4",
+  "author": {
+    "name": "Vladimir Gavrilenko"
+  }
+}
