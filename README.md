@@ -40,6 +40,42 @@ go test -race ./...
 go vet ./...
 ```
 
+## Use without VS Code
+
+VS Code is required only for the optional `.vsix` wrapper. The graph engine is a
+standalone stdio MCP server and can be used directly by Codex, Claude Code,
+Antigravity, or any other MCP client.
+
+Install the local personal plugin in Codex:
+
+```bash
+codex plugin add codebase-graph@personal
+```
+
+Configure Claude Code and Antigravity for a workspace:
+
+```bash
+/absolute/path/to/codebase-graph/bin/codebase-graph-setup \
+  --workspace /absolute/path/to/workspace
+```
+
+For another MCP client, add the server manually and always pin the actual
+workspace with an absolute path:
+
+```json
+{
+  "mcpServers": {
+    "codebase-graph": {
+      "command": "/absolute/path/to/codebase-graph/bin/codebase-graph-mcp",
+      "args": ["--workspace", "/absolute/path/to/workspace"]
+    }
+  }
+}
+```
+
+Start a new client session after installation so it loads the new MCP server and
+graph-first instructions.
+
 ## Configure Claude Code and Antigravity
 
 ```bash
