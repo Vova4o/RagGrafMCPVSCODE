@@ -92,10 +92,24 @@ installs always-loaded graph-first rules in `.claude/rules/codebase-graph.md` an
 `.agents/rules/codebase-graph.md`. Claude Code and Antigravity therefore receive
 the workflow in every new project session instead of relying on conditional skill activation.
 Existing unrelated definitions are preserved.
+The generated MCP entries point to
+`<workspace>/.codebase-graph/bin/codebase-graph-mcp`, not to a versioned plugin
+cache directory. The setup command refreshes that stable binary atomically.
 The installer first performs a real MCP `initialize` and `tools/list` handshake;
 it refuses to write configuration unless the graph-first tools are advertised.
 Its result contains `restart_required: true`: existing client sessions keep their
 old MCP process and must be replaced with a new session after an update.
+
+Every `prepare_code_context` call also audits existing `.mcp.json` and
+`.agents/mcp_config.json` entries. Missing commands and commands inside a
+versioned plugin cache are migrated automatically to the stable workspace binary,
+while unrelated configuration is preserved. Repaired clients must be restarted.
+If a stale command prevents the only configured server from starting, the
+packaged setup binary provides the same migration without hand-editing JSON:
+
+```bash
+./bin/codebase-graph-setup --action repair --workspace /absolute/path/to/workspace
+```
 
 Verify the packaged server without changing client configuration:
 

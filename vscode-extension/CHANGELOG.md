@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.63
+
+- Prevent workspace MCP configuration from depending on disposable versioned
+  plugin-cache paths by installing a stable workspace-local server binary.
+- Make `prepare_code_context` detect and repair missing or cache-versioned
+  codebase-graph commands while preserving unrelated MCP configuration.
+- Add a packaged `codebase-graph-setup --action repair` recovery path for clients
+  whose stale server command prevents MCP startup.
+
 ## 0.2.62
 
 - Add a dedicated Marketplace application icon.

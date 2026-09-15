@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -17,6 +18,7 @@ func TestServerInitializeListAndIndex(t *testing.T) {
 	repo := t.TempDir()
 	writeMCPFile(t, filepath.Join(repo, "go.mod"), "module example.com/mcp\n")
 	writeMCPFile(t, filepath.Join(repo, "main.go"), "package mcp\nfunc Run() {}\n")
+	writeMCPFile(t, filepath.Join(repo, ".mcp.json"), `{"mcpServers":{"codebase-graph":{"command":"/missing/plugins/cache/personal/codebase-graph/0.2.3/bin/codebase-graph-mcp","args":[]}}}`)
 	graphService, err := service.New(repo)
 	if err != nil {
 		t.Fatalf("service.New() error = %v", err)
@@ -89,6 +91,35 @@ func TestServerInitializeListAndIndex(t *testing.T) {
 	}
 	if prepared["server_version"] != serverVersion || prepared["graph_schema_version"] != float64(2) {
 		t.Fatalf("prepare diagnostics = %#v", prepared)
+	}
+	health, ok := prepared["configuration_health"].(map[string]any)
+	if !ok {
+		t.Fatalf("prepare diagnostics have no configuration health: %#v", prepared)
+	}
+	repaired, _ := health["repaired"].([]any)
+	if len(repaired) != 1 || health["binary_updated"] != true {
+		t.Fatalf("configuration health = %#v", health)
+	}
+	stableName := "codebase-graph-mcp"
+	if runtime.GOOS == "windows" {
+		stableName += ".exe"
+	}
+	stableBinary := filepath.Join(health["workspace"].(string), ".codebase-graph", "bin", stableName)
+	if _, err := os.Stat(stableBinary); err != nil {
+		t.Fatalf("prepare did not install stable binary: %v", err)
+	}
+	configPayload, err := os.ReadFile(filepath.Join(repo, ".mcp.json"))
+	if err != nil {
+		t.Fatalf("read repaired MCP configuration: %v", err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(configPayload, &config); err != nil {
+		t.Fatalf("decode repaired MCP configuration: %v", err)
+	}
+	servers := config["mcpServers"].(map[string]any)
+	server := servers["codebase-graph"].(map[string]any)
+	if server["command"] != stableBinary {
+		t.Fatalf("repaired command = %v, want %s", server["command"], stableBinary)
 	}
 
 	var indexedCall map[string]any

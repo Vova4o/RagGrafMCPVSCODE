@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/vladimirgavrilenko/codebase-graph/internal/graph"
 	"github.com/vladimirgavrilenko/codebase-graph/internal/service"
+	"github.com/vladimirgavrilenko/codebase-graph/internal/setup"
 )
 
 const (
@@ -150,11 +152,25 @@ func (s *Server) callTool(ctx context.Context, params callParams) toolResult {
 		if err = decodeArgs(params.Arguments, &args); err == nil {
 			var prepared service.CodeContextResult
 			prepared, err = s.service.PrepareCodeContext(ctx, args.WorkspacePath)
-			value = preparedCodeContext{
+			result := preparedCodeContext{
 				CodeContextResult:  prepared,
 				ServerVersion:      serverVersion,
 				GraphSchemaVersion: graph.SchemaVersion,
 			}
+			if err == nil {
+				executable, executableErr := os.Executable()
+				if executableErr != nil {
+					result.ConfigurationError = fmt.Sprintf("resolve running server executable: %v", executableErr)
+				} else {
+					repair, repairErr := setup.RepairStaleConfigs(ctx, prepared.Workspace, executable)
+					if repairErr != nil {
+						result.ConfigurationError = repairErr.Error()
+					} else {
+						result.Configuration = &repair
+					}
+				}
+			}
+			value = result
 		}
 	case "discover_repositories":
 		var args workspaceArgs
@@ -253,8 +269,10 @@ func (s *Server) callTool(ctx context.Context, params callParams) toolResult {
 
 type preparedCodeContext struct {
 	service.CodeContextResult
-	ServerVersion      string `json:"server_version"`
-	GraphSchemaVersion int    `json:"graph_schema_version"`
+	ServerVersion      string                    `json:"server_version"`
+	GraphSchemaVersion int                       `json:"graph_schema_version"`
+	Configuration      *setup.ConfigRepairResult `json:"configuration_health,omitempty"`
+	ConfigurationError string                    `json:"configuration_error,omitempty"`
 }
 
 type repoArgs struct {
@@ -351,7 +369,7 @@ func tools() []tool {
 	}
 	limitProperty := map[string]any{"type": "integer", "minimum": 1}
 	return []tool{
-		{Name: "prepare_code_context", Description: "Required first call before broad repository exploration for coding, debugging, refactoring, review, architecture, symbol navigation, dependency tracing, and impact analysis. Pass the absolute opened workspace as workspace_path because the MCP process may run from a plugin or scratch directory. Confirms shared graph availability and selects graph-first next steps; text search remains appropriate for exact literals or uncovered content.", InputSchema: objectSchema(map[string]any{"workspace_path": workspaceProperty})},
+		{Name: "prepare_code_context", Description: "Required first call before broad repository exploration for coding, debugging, refactoring, review, architecture, symbol navigation, dependency tracing, and impact analysis. Pass the absolute opened workspace as workspace_path because the MCP process may run from a plugin or scratch directory. Confirms shared graph availability, audits existing client MCP configuration, repairs missing or cache-versioned codebase-graph commands to a stable workspace binary, and selects graph-first next steps; text search remains appropriate for exact literals or uncovered content.", InputSchema: objectSchema(map[string]any{"workspace_path": workspaceProperty})},
 		{Name: "discover_repositories", Description: "Find actual Git repositories inside a workspace and report their individual graph paths.", InputSchema: objectSchema(map[string]any{"workspace_path": workspaceProperty})},
 		{Name: "index_workspace", Description: "Build one graph per repository, then build one aggregate workspace graph with cross-repository dependencies.", InputSchema: objectSchema(map[string]any{"workspace_path": workspaceProperty})},
 		{Name: "index_repository", Description: "Build or replace the shared multi-language graph stored inside one repository.", InputSchema: objectSchema(map[string]any{"repo_path": repoProperty})},

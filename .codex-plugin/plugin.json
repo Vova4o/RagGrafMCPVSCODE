@@ -1,6 +1,6 @@
 {
   "name": "codebase-graph",
-  "version": "0.2.5+codex.20260915074322",
+  "version": "0.2.5+codex.20260915091010",
   "description": "Prefer shared multi-language code graphs for navigation before broad text search",
   "author": {
     "name": "Vladimir Gavrilenko"

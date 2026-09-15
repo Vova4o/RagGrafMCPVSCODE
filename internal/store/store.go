@@ -29,6 +29,11 @@ func New() *Store {
 	return &Store{}
 }
 
+// EnsureLocallyIgnored keeps generated graph data out of the repository index.
+func EnsureLocallyIgnored(root string) error {
+	return ensureLocallyIgnored(root)
+}
+
 // Save atomically persists a graph in its repository.
 func (s *Store) Save(ctx context.Context, value *graph.Graph) error {
 	return s.save(ctx, value, graphFile)

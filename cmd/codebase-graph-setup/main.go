@@ -21,7 +21,7 @@ func main() {
 func run() error {
 	workspace := flag.String("workspace", "", "workspace to configure")
 	repo := flag.String("repo", "", "deprecated alias for --workspace")
-	action := flag.String("action", "install", "install, uninstall or verify")
+	action := flag.String("action", "install", "install, repair, uninstall or verify")
 	binary := flag.String("binary", "", "path to codebase-graph-mcp")
 	skill := flag.String("skill", "", "path to the canonical SKILL.md")
 	flag.Parse()
@@ -56,12 +56,14 @@ func run() error {
 	switch *action {
 	case "install":
 		result, err = installer.Install(context.Background(), configuredPath)
+	case "repair":
+		result, err = setup.RepairStaleConfigs(context.Background(), configuredPath, *binary)
 	case "uninstall":
 		result, err = installer.Uninstall(context.Background(), configuredPath)
 	case "verify":
 		result, err = installer.Verify(context.Background())
 	default:
-		return fmt.Errorf("action must be install, uninstall or verify")
+		return fmt.Errorf("action must be install, repair, uninstall or verify")
 	}
 	if err != nil {
 		return err

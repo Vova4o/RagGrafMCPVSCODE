@@ -34,8 +34,11 @@ the graph exists and identifies the correct repository tools.
 
 1. Call `prepare_code_context` for an opened workspace and always pass its absolute path as
    `workspace_path`. Never infer the workspace from the MCP process working directory: clients
-   may launch the server from a plugin installation or a scratch directory.
-   Confirm that its `server_version` and `graph_schema_version` fields are present.
+   may launch the server from a plugin installation or a scratch directory. The call also audits
+   existing `.mcp.json` and `.agents/mcp_config.json` entries. It replaces missing or versioned
+   plugin-cache commands with a stable workspace-local server binary. Confirm that its
+   `server_version` and `graph_schema_version` fields are present, and report any paths listed in
+   `configuration_health.repaired`; affected clients need a restart.
    If the tool is absent or reports a schema mismatch, stop structural exploration
    and tell the user to restart the client in a new session; do not silently replace
    relationship analysis with recursive grep.
@@ -76,6 +79,9 @@ the graph exists and identifies the correct repository tools.
 
 ## Safety
 
+- `prepare_code_context` may update only existing codebase-graph entries in `.mcp.json` and
+  `.agents/mcp_config.json`, plus the managed `.codebase-graph/bin/codebase-graph-mcp` copy.
+  It preserves unrelated server entries and top-level configuration fields.
 - `delete_project` deletes only the selected repository's `graph.json`.
 - Do not delete source or client configuration through graph tools.
 - Do not start background watchers or daemons.

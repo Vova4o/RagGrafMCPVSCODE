@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -34,11 +35,15 @@ func TestInstallerMergesAndRemovesOwnedConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Install() error = %v", err)
 	}
-	if len(result.Files) != 6 {
-		t.Fatalf("Install().Files = %d, want 6", len(result.Files))
+	if len(result.Files) != 7 {
+		t.Fatalf("Install().Files = %d, want 7", len(result.Files))
 	}
 	if result.ServerVersion != "0.2.5" || !result.RestartRequired {
 		t.Fatalf("Install() verification = %#v", result)
+	}
+	wantBinary := filepath.Join(result.Workspace, ".codebase-graph", "bin", "codebase-graph-mcp")
+	if result.BinaryPath != wantBinary {
+		t.Fatalf("Install().BinaryPath = %q, want %q", result.BinaryPath, wantBinary)
 	}
 	assertServers(t, filepath.Join(repo, ".mcp.json"), result.Workspace, true)
 	assertServers(t, filepath.Join(repo, ".agents", "mcp_config.json"), result.Workspace, false)
@@ -65,6 +70,9 @@ func TestInstallerMergesAndRemovesOwnedConfiguration(t *testing.T) {
 		if !strings.Contains(string(rule), "absolute path of the opened workspace as workspace_path") {
 			t.Fatalf("installed agent rule %s does not guard against launcher cwd changes: %q", path, rule)
 		}
+		if !strings.Contains(string(rule), "automatically replaces missing or plugin-cache-versioned") {
+			t.Fatalf("installed agent rule %s does not describe configuration self-repair: %q", path, rule)
+		}
 	}
 	antigravityRule, err := os.ReadFile(rulePaths[1])
 	if err != nil {
@@ -83,6 +91,104 @@ func TestInstallerMergesAndRemovesOwnedConfiguration(t *testing.T) {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("agent rule %s still exists after uninstall: %v", path, err)
 		}
+	}
+	if _, err := os.Stat(wantBinary); !os.IsNotExist(err) {
+		t.Fatalf("stable binary still exists after uninstall: %v", err)
+	}
+}
+
+func TestRepairStaleConfigsMigratesVersionedCacheCommands(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	source := filepath.Join(t.TempDir(), "codebase-graph-mcp")
+	if err := os.WriteFile(source, []byte("server-v1"), 0o755); err != nil {
+		t.Fatalf("write source binary: %v", err)
+	}
+	stale := filepath.Join(t.TempDir(), "plugins", "cache", "personal", "codebase-graph", "0.2.3", "bin", "codebase-graph-mcp")
+	config := `{"mcpServers":{"codebase-graph":{"command":` + strconv.Quote(stale) + `,"args":[]},"other":{"command":"other"}},"custom":true}`
+	for _, path := range []string{
+		filepath.Join(workspace, ".mcp.json"),
+		filepath.Join(workspace, ".agents", "mcp_config.json"),
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("create configuration directory: %v", err)
+		}
+		if err := os.WriteFile(path, []byte(config), 0o644); err != nil {
+			t.Fatalf("write stale configuration: %v", err)
+		}
+	}
+
+	result, err := RepairStaleConfigs(context.Background(), workspace, source)
+	if err != nil {
+		t.Fatalf("RepairStaleConfigs() error = %v", err)
+	}
+	if len(result.Checked) != 2 || len(result.Repaired) != 2 || !result.BinaryUpdated || len(result.Issues) != 0 {
+		t.Fatalf("RepairStaleConfigs() = %#v", result)
+	}
+	wantBinary := filepath.Join(result.Workspace, ".codebase-graph", "bin", "codebase-graph-mcp")
+	if result.StableBinary != wantBinary {
+		t.Fatalf("stable binary = %q, want %q", result.StableBinary, wantBinary)
+	}
+	for _, path := range result.Repaired {
+		assertServers(t, path, result.Workspace, true)
+	}
+	payload, err := os.ReadFile(wantBinary)
+	if err != nil {
+		t.Fatalf("read stable binary: %v", err)
+	}
+	if string(payload) != "server-v1" {
+		t.Fatalf("stable binary = %q, want server-v1", payload)
+	}
+
+	if err := os.WriteFile(source, []byte("server-v2"), 0o755); err != nil {
+		t.Fatalf("update source binary: %v", err)
+	}
+	refreshed, err := RepairStaleConfigs(context.Background(), result.Workspace, source)
+	if err != nil {
+		t.Fatalf("RepairStaleConfigs() refresh error = %v", err)
+	}
+	if len(refreshed.Repaired) != 0 || !refreshed.BinaryUpdated {
+		t.Fatalf("RepairStaleConfigs() refresh = %#v", refreshed)
+	}
+	payload, err = os.ReadFile(wantBinary)
+	if err != nil {
+		t.Fatalf("read refreshed binary: %v", err)
+	}
+	if string(payload) != "server-v2" {
+		t.Fatalf("refreshed binary = %q, want server-v2", payload)
+	}
+}
+
+func TestRepairStaleConfigsPreservesHealthyPortableCommand(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	serverDir := filepath.Join(workspace, "bin")
+	if err := os.MkdirAll(serverDir, 0o755); err != nil {
+		t.Fatalf("create server directory: %v", err)
+	}
+	server := filepath.Join(serverDir, "codebase-graph-mcp")
+	if err := os.WriteFile(server, []byte("server"), 0o755); err != nil {
+		t.Fatalf("write server binary: %v", err)
+	}
+	configPath := filepath.Join(workspace, ".mcp.json")
+	original := `{"mcpServers":{"codebase-graph":{"command":"./bin/codebase-graph-mcp","args":[],"cwd":"."}}}`
+	if err := os.WriteFile(configPath, []byte(original), 0o644); err != nil {
+		t.Fatalf("write configuration: %v", err)
+	}
+
+	result, err := RepairStaleConfigs(context.Background(), workspace, server)
+	if err != nil {
+		t.Fatalf("RepairStaleConfigs() error = %v", err)
+	}
+	if len(result.Checked) != 1 || len(result.Repaired) != 0 || result.BinaryUpdated || result.StableBinary != "" {
+		t.Fatalf("RepairStaleConfigs() = %#v", result)
+	}
+	payload, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read configuration: %v", err)
+	}
+	if string(payload) != original {
+		t.Fatalf("healthy configuration changed to %q", payload)
 	}
 }
 
@@ -168,8 +274,9 @@ func assertServers(t *testing.T, path, repo string, wantOther bool) {
 	if !exists {
 		t.Fatalf("%s has no %s server", path, serverName)
 	}
-	if server["command"] == "" {
-		t.Fatalf("%s has an empty server command", path)
+	wantCommand := filepath.Join(repo, ".codebase-graph", "bin", "codebase-graph-mcp")
+	if server["command"] != wantCommand {
+		t.Fatalf("%s server command = %v, want %s", path, server["command"], wantCommand)
 	}
 	if server["cwd"] != repo {
 		t.Fatalf("%s server cwd = %v, want %s", path, server["cwd"], repo)

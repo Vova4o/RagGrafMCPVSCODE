@@ -2,7 +2,7 @@
   "name": "codebase-graph",
   "displayName": "Codebase Graph",
   "description": "Shared multi-language repository graphs plus one aggregate workspace graph for coding agents.",
-  "version": "0.2.62",
+  "version": "0.2.63",
   "publisher": "vova4o",
   "icon": "media/codebase-graph-icon.png",
   "license": "MIT",
