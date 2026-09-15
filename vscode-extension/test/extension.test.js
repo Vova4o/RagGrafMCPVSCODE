@@ -14,14 +14,24 @@ const {
   runMcpTool
 } = require('../extension');
 
-test('bundledBinaryPath selects the local platform binary', () => {
-  assert.equal(
-    bundledBinaryPath('/extension', 'darwin', 'arm64'),
-    path.join('/extension', 'bin', 'darwin-arm64', 'codebase-graph-mcp')
-  );
+test('bundledBinaryPath selects every packaged platform binary', () => {
+  const cases = [
+    ['darwin', 'arm64', 'codebase-graph-mcp'],
+    ['darwin', 'x64', 'codebase-graph-mcp'],
+    ['linux', 'arm64', 'codebase-graph-mcp'],
+    ['linux', 'x64', 'codebase-graph-mcp'],
+    ['win32', 'arm64', 'codebase-graph-mcp.exe'],
+    ['win32', 'x64', 'codebase-graph-mcp.exe']
+  ];
+  for (const [platform, architecture, executable] of cases) {
+    assert.equal(
+      bundledBinaryPath('/extension', platform, architecture),
+      path.join('/extension', 'bin', `${platform}-${architecture}`, executable)
+    );
+  }
   assert.throws(
-    () => bundledBinaryPath('/extension', 'linux', 'x64'),
-    /unsupported platform linux-x64/
+    () => bundledBinaryPath('/extension', 'freebsd', 'x64'),
+    /unsupported platform freebsd-x64/
   );
 });
 

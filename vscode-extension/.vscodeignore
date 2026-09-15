@@ -2,7 +2,17 @@
 .vscodeignore
 bin/*
 !bin/darwin-arm64/
+!bin/darwin-x64/
+!bin/linux-arm64/
+!bin/linux-x64/
+!bin/win32-arm64/
+!bin/win32-x64/
 !bin/darwin-arm64/codebase-graph-mcp
+!bin/darwin-x64/codebase-graph-mcp
+!bin/linux-arm64/codebase-graph-mcp
+!bin/linux-x64/codebase-graph-mcp
+!bin/win32-arm64/codebase-graph-mcp.exe
+!bin/win32-x64/codebase-graph-mcp.exe
 dist/
 node_modules/
 scripts/

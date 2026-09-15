@@ -22,4 +22,5 @@ In a multi-root VS Code window, select the workspace root to operate on. Each lo
 workspace root gets one workspace-scoped MCP server, which discovers its internal
 repositories automatically.
 
-This local package contains the server binary for Apple Silicon macOS.
+The universal package contains native server binaries for x64 and ARM64 Windows,
+Linux, and macOS hosts. VS Code selects the matching binary at runtime.

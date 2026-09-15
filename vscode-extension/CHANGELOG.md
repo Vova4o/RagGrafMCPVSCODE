@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.5
+
+- Ship one universal VSIX with native MCP server binaries for x64 and ARM64
+  Windows, Linux, and macOS hosts.
+
 ## 0.2.4
 
 - Require the absolute opened `workspace_path` in graph-first guidance so MCP

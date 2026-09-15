@@ -20,4 +20,4 @@ vscode-package:
 	cd vscode-extension && npm ci && npm run package:local
 
 vscode-install: vscode-package
-	code --install-extension vscode-extension/dist/codebase-graph-vscode-darwin-arm64.vsix --force
+	code --install-extension vscode-extension/dist/codebase-graph-vscode-universal.vsix --force

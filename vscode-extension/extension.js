@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const providerID = 'codebaseGraph.repositories';
-const serverVersion = '0.2.4';
+const serverVersion = '0.2.5';
 const protocolVersion = '2025-06-18';
 
 function activate(context) {
@@ -120,11 +120,16 @@ async function pickWorkspaceFolder(vscode) {
 
 function bundledBinaryPath(extensionPath, platform = process.platform, architecture = process.arch) {
   const supported = new Set([
-    'darwin-arm64'
+    'darwin-arm64',
+    'darwin-x64',
+    'linux-arm64',
+    'linux-x64',
+    'win32-arm64',
+    'win32-x64'
   ]);
   const target = `${platform}-${architecture}`;
   if (!supported.has(target)) {
-    throw new Error(`unsupported platform ${target}; this local VSIX contains only the darwin-arm64 server`);
+    throw new Error(`unsupported platform ${target}; this VSIX supports modern x64 and arm64 Windows, Linux, and macOS hosts`);
   }
   const executable = platform === 'win32' ? 'codebase-graph-mcp.exe' : 'codebase-graph-mcp';
   return path.join(extensionPath, 'bin', target, executable);

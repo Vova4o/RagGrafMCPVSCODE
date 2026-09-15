@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -58,6 +59,37 @@ func TestStoreConcurrentWritesRemainValid(t *testing.T) {
 	}
 	if loaded.SchemaVersion != graph.SchemaVersion || len(loaded.Nodes) != 1 {
 		t.Fatalf("loaded graph is invalid: %#v", loaded)
+	}
+}
+
+func TestWithLockHonorsCancellation(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "graph.lock")
+	locked := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- withLock(context.Background(), path, func() error {
+			close(locked)
+			<-release
+			return nil
+		})
+	}()
+	<-locked
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	err := withLock(ctx, path, func() error {
+		t.Fatal("action ran without acquiring the graph lock")
+		return nil
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("withLock() error = %v, want context deadline exceeded", err)
+	}
+
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("first withLock() error = %v", err)
 	}
 }
 

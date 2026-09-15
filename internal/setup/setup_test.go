@@ -37,7 +37,7 @@ func TestInstallerMergesAndRemovesOwnedConfiguration(t *testing.T) {
 	if len(result.Files) != 6 {
 		t.Fatalf("Install().Files = %d, want 6", len(result.Files))
 	}
-	if result.ServerVersion != "0.2.4" || !result.RestartRequired {
+	if result.ServerVersion != "0.2.5" || !result.RestartRequired {
 		t.Fatalf("Install() verification = %#v", result)
 	}
 	assertServers(t, filepath.Join(repo, ".mcp.json"), result.Workspace, true)
@@ -118,14 +118,14 @@ func TestUninstallDoesNotCreateMissingConfiguration(t *testing.T) {
 
 func TestParseVerificationRequiresGraphFirstTools(t *testing.T) {
 	t.Parallel()
-	valid := []byte(`{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"codebase-graph","version":"0.2.4"}}}
+	valid := []byte(`{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"codebase-graph","version":"0.2.5"}}}
 {"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"prepare_code_context"},{"name":"index_workspace"},{"name":"search_workspace_graph"},{"name":"trace_path"}]}}
 `)
 	result, err := parseVerification(valid)
 	if err != nil {
 		t.Fatalf("parseVerification() error = %v", err)
 	}
-	if result.ServerVersion != "0.2.4" || len(result.Tools) != len(requiredServerTools) {
+	if result.ServerVersion != "0.2.5" || len(result.Tools) != len(requiredServerTools) {
 		t.Fatalf("parseVerification() = %#v", result)
 	}
 
@@ -138,7 +138,7 @@ func TestParseVerificationRequiresGraphFirstTools(t *testing.T) {
 }
 
 func successfulVerification(context.Context, string) (VerifyResult, error) {
-	return VerifyResult{ServerVersion: "0.2.4", Tools: append([]string(nil), requiredServerTools...)}, nil
+	return VerifyResult{ServerVersion: "0.2.5", Tools: append([]string(nil), requiredServerTools...)}, nil
 }
 
 func TestCodexPluginUsesPackagedServerBinary(t *testing.T) {

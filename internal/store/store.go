@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/vladimirgavrilenko/codebase-graph/internal/graph"
@@ -293,12 +292,13 @@ func withLock(ctx context.Context, path string, action func() error) error {
 	defer file.Close()
 
 	for {
-		err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
-		if err == nil {
-			break
-		}
-		if err != syscall.EWOULDBLOCK {
+		var locked bool
+		locked, err = tryFileLock(file)
+		if err != nil {
 			return fmt.Errorf("lock graph %s: %w", path, err)
+		}
+		if locked {
+			break
 		}
 		select {
 		case <-ctx.Done():
@@ -306,10 +306,16 @@ func withLock(ctx context.Context, path string, action func() error) error {
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
-	defer syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
 
 	if err := ctx.Err(); err != nil {
+		if unlockErr := unlockFile(file); unlockErr != nil {
+			return fmt.Errorf("use graph lock %s: %w", path, unlockErr)
+		}
 		return fmt.Errorf("use graph lock %s: %w", path, err)
 	}
-	return action()
+	actionErr := action()
+	if err := unlockFile(file); err != nil {
+		return fmt.Errorf("unlock graph %s: %w", path, err)
+	}
+	return actionErr
 }
