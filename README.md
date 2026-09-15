@@ -3,6 +3,10 @@
 `codebase-graph` is a local multi-language code graph shared by Codex, Claude Code,
 Google Antigravity, and VS Code. It has no daemon and no per-agent databases.
 
+## Install for VS Code
+
+[Install Codebase Graph from the Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=vova4o.codebase-graph)
+
 ## Graph layout
 
 When a Git repository is opened directly, the plugin creates:
