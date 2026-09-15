@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.7
+## 0.2.61
 
 - Add direct repository and issue-reporting links to the Marketplace README.
 
