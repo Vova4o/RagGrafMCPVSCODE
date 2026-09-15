@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.6
+
+- Add a Marketplace overview image showing cross-repository dependency graphs.
+
 ## 0.2.5
 
 - Ship one universal VSIX with native MCP server binaries for x64 and ARM64
