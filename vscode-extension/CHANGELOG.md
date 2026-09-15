@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.62
+
+- Add a dedicated Marketplace application icon.
+- Fix the overview image URL so the banner renders on the Marketplace page.
+
 ## 0.2.61
 
 - Add direct repository and issue-reporting links to the Marketplace README.
