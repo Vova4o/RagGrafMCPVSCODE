@@ -4,6 +4,8 @@ This extension provides VS Code agents with the `codebase-graph` MCP server. It
 indexes supported source languages into one graph per actual Git repository and
 one aggregate graph per opened workspace.
 
+[GitHub repository](https://github.com/Vova4o/RagGrafMCPVSCODE) · [Report an issue](https://github.com/Vova4o/RagGrafMCPVSCODE/issues/new)
+
 ![Codebase Graph visualizing cross-repository dependencies](media/codebase-graph-marketplace-v2.png)
 
 ```text

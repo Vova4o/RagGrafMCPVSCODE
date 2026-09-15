@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.7
+
+- Add direct repository and issue-reporting links to the Marketplace README.
+
 ## 0.2.6
 
 - Add a Marketplace overview image showing cross-repository dependency graphs.
