@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.65
+## 0.2.70
 
 - Tolerate limited syntax errors and index recoverable regions of source files.
 - Record JavaScript and TypeScript constructor calls, literal dynamic imports and
