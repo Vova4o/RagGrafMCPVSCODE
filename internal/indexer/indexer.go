@@ -250,6 +250,7 @@ func (i *Indexer) Index(ctx context.Context, repoPath string) (*graph.Graph, err
 	for _, file := range parsed {
 		for _, importPath := range file.importPath {
 			g.Dependencies = append(g.Dependencies, importPath)
+			g.ImportPaths = append(g.ImportPaths, importPath)
 			target, exists := nodesByQualified[importPath]
 			if !exists {
 				target = externalNode(importPath, filepath.Base(importPath), "package")
@@ -298,8 +299,11 @@ func (i *Indexer) Index(ctx context.Context, repoPath string) (*graph.Graph, err
 	if err != nil {
 		return nil, err
 	}
+	g.URLHosts = append(g.URLHosts, references...)
 	g.Dependencies = append(g.Dependencies, references...)
 	g.Dependencies = uniqueSorted(g.Dependencies)
+	g.ImportPaths = uniqueSorted(g.ImportPaths)
+	g.URLHosts = uniqueSorted(g.URLHosts)
 
 	for _, edge := range edges {
 		g.Edges = append(g.Edges, edge)

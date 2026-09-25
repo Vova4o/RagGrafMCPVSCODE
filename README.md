@@ -26,8 +26,38 @@ each repository plus one aggregate graph at the workspace root:
 ```
 
 The aggregate graph contains the child graphs and repository-level `DEPENDS_ON`
-edges inferred from module imports and explicit service URLs. Repository graphs are never merged on disk or
-duplicated per client.
+edges inferred from exact module imports and explicitly mapped service URLs.
+Repository graphs are never merged on disk or duplicated per client.
+
+### Cross-repository dependencies
+
+`DEPENDS_ON` links a repository to another repository when an indexed import
+declaration references the target repository's exact module path (or a path
+beneath that module), or when an indexed source file contains an explicit HTTP(S)
+URL whose host is assigned to the target repository in the service map. Repository
+names, host substrings, SQL table names, and HTML asset names alone do not
+establish a dependency.
+
+To map service hosts, place `codebase-graph.services.json` at the workspace root:
+
+```json
+{
+  "services": [
+    {
+      "repository": "api",
+      "hosts": ["api.example.test:8080"]
+    }
+  ]
+}
+```
+
+`repository` is a path relative to the workspace root and must identify an
+indexed repository. `hosts` lists the exact host names, including a port when
+the source URL uses one. The mapping lets static URL references such as
+`https://api.example.test:8080/v1/items` create a `web` → `api` edge.
+`DEPENDS_ON` records evidence found in source code; it does not prove that the
+application makes a request at runtime. The graph does not trace HTTP calls
+between services dynamically.
 
 ## Languages
 

@@ -94,9 +94,11 @@ the graph exists and identifies the correct repository tools.
   reported as skipped in index coverage. Generated `dist/` and `out/` trees are
   excluded, as are hidden directories, nested repositories, vendor trees,
   `node_modules`, build output, and `.codebase-graph`.
-- `DEPENDS_ON` is inferred from indexed module imports or explicit service URLs
-  matching another repository's identity. Treat it as source evidence, not proof
-  that runtime traffic actually occurred.
+- Cross-repository `DEPENDS_ON` edges require an exact external module import
+  matching the target repository, or an explicit host mapping in the workspace-root
+  `codebase-graph.services.json`. Unmapped URLs and substring matches on names
+  are not edges. HTTP runtime calls and URLs computed through variables remain
+  outside the model; these edges are source evidence, not proof of runtime traffic.
 
 ## Safety
 

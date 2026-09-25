@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.71
+
+- Infer cross-repository `DEPENDS_ON` edges from exact typed import paths or
+  explicit HTTP(S) service host mappings, including optional ports; remove
+  repository-name, SQL-table, and asset-name substring matches.
+- Document that these edges show static source evidence and do not trace runtime
+  HTTP traffic.
+
 ## 0.2.70
 
 - Tolerate limited syntax errors and index recoverable regions of source files.

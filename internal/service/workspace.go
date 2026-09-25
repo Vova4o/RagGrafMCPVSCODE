@@ -293,14 +293,27 @@ func aggregateWorkspace(workspace string, repositories []*graph.Graph) (*graph.G
 		}
 	}
 
+	serviceHosts, err := loadServiceHosts(workspace, targets)
+	if err != nil {
+		return nil, 0, err
+	}
+
 	crossEdges := 0
 	for _, source := range repositories {
-		for _, dependency := range source.Dependencies {
+		for _, importPath := range source.ImportPaths {
 			for targetRoot, target := range targets {
-				if targetRoot == source.Root || !dependencyMatchesTarget(dependency, target.Module, target.Name) {
+				if targetRoot == source.Root || !dependencyMatchesModule(importPath, target.Module, supportsDottedModule(target)) {
 					continue
 				}
 				addWorkspaceEdge(edges, repositoryNodes[source.Root].ID, repositoryNodes[targetRoot].ID, graph.EdgeDependsOn)
+			}
+		}
+		for _, rawHost := range source.URLHosts {
+			host, hostErr := normalizeServiceHost(rawHost)
+			if hostErr == nil {
+				if targetRoot, ok := serviceHosts[host]; ok && targetRoot != source.Root {
+					addWorkspaceEdge(edges, repositoryNodes[source.Root].ID, repositoryNodes[targetRoot].ID, graph.EdgeDependsOn)
+				}
 			}
 		}
 	}
@@ -321,30 +334,28 @@ func aggregateWorkspace(workspace string, repositories []*graph.Graph) (*graph.G
 	return result, crossEdges, nil
 }
 
-func dependencyMatchesTarget(dependency, module, name string) bool {
-	dependency = strings.TrimPrefix(strings.TrimSpace(dependency), "./")
+func dependencyMatchesModule(dependency, module string, dottedModule bool) bool {
+	dependency = strings.TrimSpace(dependency)
+	if strings.HasPrefix(dependency, ".") {
+		return false
+	}
 	module = strings.TrimSpace(module)
-	if module != "" && (dependency == module || strings.HasPrefix(dependency, module+"/") || strings.HasPrefix(dependency, module+".")) {
+	if module == "" {
+		return false
+	}
+	if dependency == module || strings.HasPrefix(dependency, module+"/") {
 		return true
 	}
-	normalizedDependency := normalizeIdentity(dependency)
-	for _, identity := range []string{name, filepath.Base(module)} {
-		normalizedIdentity := normalizeIdentity(identity)
-		if len(normalizedIdentity) >= 4 && strings.Contains(normalizedDependency, normalizedIdentity) {
+	return dottedModule && strings.Contains(module, ".") && !strings.Contains(module, "/") && strings.HasPrefix(dependency, module+".")
+}
+
+func supportsDottedModule(target *graph.Graph) bool {
+	for _, language := range []string{"java", "kotlin", "python", "csharp"} {
+		if target.Coverage.IndexedByLanguage[language] > 0 {
 			return true
 		}
 	}
 	return false
-}
-
-func normalizeIdentity(value string) string {
-	var result strings.Builder
-	for _, char := range strings.ToLower(value) {
-		if char >= 'a' && char <= 'z' || char >= '0' && char <= '9' {
-			result.WriteRune(char)
-		}
-	}
-	return result.String()
 }
 
 func addWorkspaceEdge(edges map[string]graph.Edge, from, to, kind string) {

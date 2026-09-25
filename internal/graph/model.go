@@ -73,6 +73,8 @@ type Graph struct {
 	Edges         []Edge    `json:"edges"`
 	Coverage      Coverage  `json:"coverage"`
 	Dependencies  []string  `json:"dependencies,omitempty"`
+	ImportPaths   []string  `json:"import_paths,omitempty"`
+	URLHosts      []string  `json:"url_hosts,omitempty"`
 }
 
 // ProjectSummary is the compact form returned when listing indexes.

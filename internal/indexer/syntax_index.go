@@ -176,6 +176,7 @@ func indexSyntaxCore(ctx context.Context, root, modulePath string, files []sourc
 				addEdge(edges, file.node.ID, target.node.ID, graph.EdgeImports)
 				continue
 			}
+			value.ImportPaths = append(value.ImportPaths, importPath)
 			dependency := imp.Path
 			value.Dependencies = append(value.Dependencies, dependency)
 			targetID := externalIDs[dependency]

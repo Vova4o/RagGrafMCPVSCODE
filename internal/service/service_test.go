@@ -172,6 +172,189 @@ export function start() { Serve(); }
 	}
 }
 
+func TestIndexWorkspaceDoesNotInferDependencyFromHostOrAssetName(t *testing.T) {
+	t.Parallel()
+	workspace, api, web := newWorkspaceRepositories(t)
+	writeServiceFile(t, filepath.Join(web, "config.ts"), `const apiURL = "https://api.example.test:8080";
+const logo = "api-logo.svg";
+`)
+
+	graphService, err := NewWorkspace(workspace)
+	if err != nil {
+		t.Fatalf("NewWorkspace() error = %v", err)
+	}
+	if _, err := graphService.IndexWorkspace(context.Background(), ""); err != nil {
+		t.Fatalf("IndexWorkspace() error = %v", err)
+	}
+	dependencies, err := graphService.QueryWorkspaceGraph("", "web", graph.EdgeDependsOn, "api", 10)
+	if err != nil {
+		t.Fatalf("QueryWorkspaceGraph() error = %v", err)
+	}
+	if dependencies.Total != 0 {
+		t.Fatalf("dependency edges = %#v, want none for unconfigured host and asset references (api: %s)", dependencies, api)
+	}
+}
+
+func TestIndexWorkspaceDoesNotInferDependencyFromSQLTableName(t *testing.T) {
+	t.Parallel()
+	workspace, api, web := newWorkspaceRepositories(t)
+	writeServiceFile(t, filepath.Join(api, "go.mod"), "module api\n")
+	writeServiceFile(t, filepath.Join(web, "schema.sql"), "SELECT * FROM api;\n")
+
+	graphService, err := NewWorkspace(workspace)
+	if err != nil {
+		t.Fatalf("NewWorkspace() error = %v", err)
+	}
+	if _, err := graphService.IndexWorkspace(context.Background(), ""); err != nil {
+		t.Fatalf("IndexWorkspace() error = %v", err)
+	}
+	indexedWeb, err := graphService.store.Load(web)
+	if err != nil {
+		t.Fatalf("load indexed web repository: %v", err)
+	}
+	foundDependency := false
+	for _, dependency := range indexedWeb.Dependencies {
+		if dependency == "api" {
+			foundDependency = true
+			break
+		}
+	}
+	if !foundDependency {
+		t.Fatalf("indexed dependencies = %#v, want SQL dependency api", indexedWeb.Dependencies)
+	}
+	dependencies, err := graphService.QueryWorkspaceGraph("", "web", graph.EdgeDependsOn, "api", 10)
+	if err != nil {
+		t.Fatalf("QueryWorkspaceGraph() error = %v", err)
+	}
+	if dependencies.Total != 0 {
+		t.Fatalf("dependency edges = %#v, want none for a SQL table named after the repository", dependencies)
+	}
+}
+
+func TestIndexWorkspaceDoesNotInferDependencyFromUnresolvedRelativeImport(t *testing.T) {
+	t.Parallel()
+	workspace, api, web := newWorkspaceRepositories(t)
+	writeServiceFile(t, filepath.Join(api, "go.mod"), "module api\n")
+	writeServiceFile(t, filepath.Join(web, "app.ts"), `import { call } from "./api";
+export function start() { return call(); }
+`)
+
+	graphService, err := NewWorkspace(workspace)
+	if err != nil {
+		t.Fatalf("NewWorkspace() error = %v", err)
+	}
+	if _, err := graphService.IndexWorkspace(context.Background(), ""); err != nil {
+		t.Fatalf("IndexWorkspace() error = %v", err)
+	}
+	indexedWeb, err := graphService.store.Load(web)
+	if err != nil {
+		t.Fatalf("load indexed web repository: %v", err)
+	}
+	foundImport := false
+	for _, importPath := range indexedWeb.ImportPaths {
+		if importPath == "./api" {
+			foundImport = true
+			break
+		}
+	}
+	if !foundImport {
+		t.Fatalf("indexed import paths = %#v, want unresolved relative import ./api", indexedWeb.ImportPaths)
+	}
+	dependencies, err := graphService.QueryWorkspaceGraph("", "web", graph.EdgeDependsOn, "api", 10)
+	if err != nil {
+		t.Fatalf("QueryWorkspaceGraph() error = %v", err)
+	}
+	if dependencies.Total != 0 {
+		t.Fatalf("dependency edges = %#v, want none for unresolved relative import", dependencies)
+	}
+}
+
+func TestIndexWorkspaceRejectsUnknownServiceHostRepository(t *testing.T) {
+	t.Parallel()
+	workspace, _, _ := newWorkspaceRepositories(t)
+	if err := os.MkdirAll(filepath.Join(workspace, "missing"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	writeServiceFile(t, filepath.Join(workspace, "codebase-graph.services.json"), `{
+  "services": [{"repository": "missing", "hosts": ["api.example.test"]}]
+}
+`)
+
+	graphService, err := NewWorkspace(workspace)
+	if err != nil {
+		t.Fatalf("NewWorkspace() error = %v", err)
+	}
+	_, err = graphService.IndexWorkspace(context.Background(), "")
+	if err == nil || !strings.Contains(err.Error(), "does not match a target graph") {
+		t.Fatalf("IndexWorkspace() error = %v, want unknown repository error", err)
+	}
+}
+
+func TestIndexWorkspaceRejectsConflictingNormalizedServiceHosts(t *testing.T) {
+	t.Parallel()
+	workspace, _, _ := newWorkspaceRepositories(t)
+	writeServiceFile(t, filepath.Join(workspace, "codebase-graph.services.json"), `{
+  "services": [
+    {"repository": "api", "hosts": ["API.example.test:8080"]},
+    {"repository": "web", "hosts": ["api.example.test:8080"]}
+  ]
+}
+`)
+
+	graphService, err := NewWorkspace(workspace)
+	if err != nil {
+		t.Fatalf("NewWorkspace() error = %v", err)
+	}
+	_, err = graphService.IndexWorkspace(context.Background(), "")
+	if err == nil || !strings.Contains(err.Error(), "assigned to multiple repositories") {
+		t.Fatalf("IndexWorkspace() error = %v, want conflicting host assignment error", err)
+	}
+}
+
+func TestIndexWorkspaceMapsExplicitServiceHostToRepository(t *testing.T) {
+	t.Parallel()
+	workspace, _, web := newWorkspaceRepositories(t)
+	writeServiceFile(t, filepath.Join(workspace, "codebase-graph.services.json"), `{
+  "services": [{"repository": "api", "hosts": ["api.example.test:8080"]}]
+}
+`)
+	writeServiceFile(t, filepath.Join(web, "client.ts"), `export async function load() {
+  return fetch("https://api.example.test:8080/v1/items");
+}
+`)
+
+	graphService, err := NewWorkspace(workspace)
+	if err != nil {
+		t.Fatalf("NewWorkspace() error = %v", err)
+	}
+	if _, err := graphService.IndexWorkspace(context.Background(), ""); err != nil {
+		t.Fatalf("IndexWorkspace() error = %v", err)
+	}
+	dependencies, err := graphService.QueryWorkspaceGraph("", "web", graph.EdgeDependsOn, "api", 10)
+	if err != nil {
+		t.Fatalf("QueryWorkspaceGraph() error = %v", err)
+	}
+	if dependencies.Total != 1 {
+		t.Fatalf("dependency edges = %#v, want one web-to-api edge", dependencies)
+	}
+}
+
+func newWorkspaceRepositories(t *testing.T) (workspace, api, web string) {
+	t.Helper()
+	workspace = t.TempDir()
+	api = filepath.Join(workspace, "api")
+	web = filepath.Join(workspace, "web")
+	for _, repo := range []string{api, web} {
+		if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeServiceFile(t, filepath.Join(api, "go.mod"), "module example.com/api\n")
+	writeServiceFile(t, filepath.Join(api, "api.go"), "package api\nfunc Serve() {}\n")
+	writeServiceFile(t, filepath.Join(web, "package.json"), `{"name":"example-web"}`)
+	return workspace, api, web
+}
+
 func traceContains(result TraceResult, qualified string) bool {
 	for _, node := range result.Nodes {
 		if node.QualifiedName == qualified {

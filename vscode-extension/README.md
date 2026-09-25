@@ -16,6 +16,28 @@ one aggregate graph per opened workspace.
 All agents share those files. The extension does not create agent-specific indexes
 and does not run a daemon or watcher.
 
+## Cross-repository dependencies
+
+The workspace graph adds `DEPENDS_ON` when an indexed typed import names the
+target repository's exact module path (or a path beneath it), or when source code
+contains an HTTP(S) URL whose exact host is mapped to that repository. Substring
+matches in repository names, SQL table names, and asset names do not create edges.
+
+To map service hosts, create `codebase-graph.services.json` in the workspace root:
+
+```json
+{
+  "services": [
+    { "repository": "api", "hosts": ["api.example.test:8080"] }
+  ]
+}
+```
+
+`repository` is a path relative to the workspace root. List the exact URL host;
+include its port when the source URL uses one. These edges record static source
+evidence and do not trace HTTP requests at runtime. URLs assembled from variables
+and actual service-to-service traffic are not detected.
+
 ## Language coverage
 
 Go uses the standard-library AST. JavaScript, TypeScript, TSX, Python, Rust, Java,

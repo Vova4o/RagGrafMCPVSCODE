@@ -121,6 +121,30 @@ export const load = async () => client();
 	}
 }
 
+func TestIndexSeparatesImportPathsAndURLHosts(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "src", "app.ts"), `import { client } from "@example/api/client";
+export function load() { return client(); }
+`)
+	writeTestFile(t, filepath.Join(root, "db", "query.sql"), "SELECT * FROM users;\n")
+	writeTestFile(t, filepath.Join(root, "web", "index.html"), `<img src="assets/logo.svg">`)
+	writeTestFile(t, filepath.Join(root, "deploy", "services.yaml"), "endpoint: https://api.example.test:8443/v1\n")
+
+	value, err := New().Index(context.Background(), root)
+	if err != nil {
+		t.Fatalf("Index() error = %v", err)
+	}
+	wantImports := []string{"@example/api/client"}
+	if len(value.ImportPaths) != len(wantImports) || value.ImportPaths[0] != wantImports[0] {
+		t.Fatalf("ImportPaths = %#v, want %#v", value.ImportPaths, wantImports)
+	}
+	wantHosts := []string{"api.example.test:8443"}
+	if len(value.URLHosts) != len(wantHosts) || value.URLHosts[0] != wantHosts[0] {
+		t.Fatalf("URLHosts = %#v, want %#v", value.URLHosts, wantHosts)
+	}
+}
+
 func TestIndexIgnoresDistAndOutDirectories(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -149,14 +173,15 @@ func TestServiceReferencesRequireExplicitURL(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	path := filepath.Join(root, "config.go")
-	writeTestFile(t, path, "package config\n// mmemo-gateway is the caller, not a dependency\nconst upstream = \"http://mmemo-chat:8080\"\n")
+	writeTestFile(t, path, "package config\n// mmemo-gateway is the caller, not a dependency\nconst upstream = \"http://mmemo-chat:8080\"\nconst external = \"https://api.example.test\"\nconst local = \"http://[::1]:8080\"\nconst asset = \"maracuya-logo.svg\"\n")
 
 	references, err := serviceReferences(context.Background(), []sourceFile{{Path: path, Language: "go"}})
 	if err != nil {
 		t.Fatalf("serviceReferences() error = %v", err)
 	}
-	if len(references) != 1 || references[0] != "mmemo-chat" {
-		t.Fatalf("references = %#v, want mmemo-chat only", references)
+	want := []string{"[::1]:8080", "api.example.test", "mmemo-chat:8080"}
+	if len(references) != len(want) || references[0] != want[0] || references[1] != want[1] || references[2] != want[2] {
+		t.Fatalf("references = %#v, want %#v", references, want)
 	}
 }
 

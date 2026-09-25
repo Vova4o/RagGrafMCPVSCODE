@@ -37,7 +37,7 @@ var (
 	sqlDependency    = regexp.MustCompile(`(?i)\b(?:from|join|insert\s+into|update|references)\s+([A-Za-z_][\w.$-]*)`)
 	htmlDependency   = regexp.MustCompile(`(?i)\b(?:src|href)=["']([^"'#]+)`)
 	callPattern      = regexp.MustCompile(`\b([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*\(`)
-	serviceReference = regexp.MustCompile(`(?i)https?://([a-z0-9][a-z0-9._-]*)`)
+	serviceReference = regexp.MustCompile(`(?i)https?://((?:[a-z0-9][a-z0-9._-]*|\[[0-9a-f:.]+\])(?::[0-9]+)?)`)
 )
 
 type declaration struct {
@@ -175,6 +175,7 @@ func indexAdditional(
 			}
 			addEdge(edges, fileNode.ID, targetID, graph.EdgeImports)
 		}
+		value.ImportPaths = append(value.ImportPaths, importPathsFor(source.Language, lines)...)
 		for _, node := range declarationNodes {
 			for line := node.StartLine; line <= node.EndLine && line <= len(lines); line++ {
 				for _, match := range callPattern.FindAllStringSubmatch(lines[line-1], -1) {
@@ -203,6 +204,33 @@ func indexAdditional(
 		}
 	}
 	return nil
+}
+
+func importPathsFor(language string, lines []string) []string {
+	var pattern *regexp.Regexp
+	switch language {
+	case "vue", "svelte":
+		pattern = jsImport
+	case "c", "cpp":
+		pattern = includeImport
+	case "ruby":
+		pattern = rubyImport
+	case "php":
+		pattern = phpImport
+	case "protobuf":
+		pattern = protoImport
+	default:
+		return nil
+	}
+	var result []string
+	for _, line := range lines {
+		if match := pattern.FindStringSubmatch(line); len(match) > 1 {
+			if value := strings.TrimSpace(match[1]); value != "" {
+				result = append(result, value)
+			}
+		}
+	}
+	return uniqueSorted(result)
 }
 
 func declarationsFor(language string, lines []string) []declaration {
