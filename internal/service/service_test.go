@@ -73,6 +73,42 @@ func TestServiceRejectsDifferentRepository(t *testing.T) {
 	}
 }
 
+func TestServiceClassTraceAggregatesMethodCallersAndCallees(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeServiceFile(t, filepath.Join(root, "package.json"), `{"name":"class-trace-fixture"}`)
+	writeServiceFile(t, filepath.Join(root, "engine.ts"), "export class Engine {\n"+
+		"  start() { return helper(); }\n"+
+		"  helper() { return 1; }\n"+
+		"}\n"+
+		"export function launch() { const engine = new Engine(); engine.start(); }\n")
+
+	graphService, err := New(root)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if _, err := graphService.Index(context.Background(), ""); err != nil {
+		t.Fatalf("Index() error = %v", err)
+	}
+	typeSearch, err := graphService.Search("", "Engine", graph.KindType, 10)
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(typeSearch.Matches) != 1 {
+		t.Fatalf("Type search matches = %#v, want one Engine", typeSearch.Matches)
+	}
+
+	trace, err := graphService.Trace("", typeSearch.Matches[0].QualifiedName, "both", 2, 20, []string{graph.EdgeCalls})
+	if err != nil {
+		t.Fatalf("Trace() error = %v", err)
+	}
+	for _, name := range []string{"launch", "helper"} {
+		if !traceContainsName(trace, name) {
+			t.Errorf("class trace does not contain %q caller/callee: %#v", name, trace.Nodes)
+		}
+	}
+}
+
 func TestIndexWorkspaceCreatesIndividualAndAggregateGraphs(t *testing.T) {
 	t.Parallel()
 	workspace := t.TempDir()
@@ -139,6 +175,15 @@ export function start() { Serve(); }
 func traceContains(result TraceResult, qualified string) bool {
 	for _, node := range result.Nodes {
 		if node.QualifiedName == qualified {
+			return true
+		}
+	}
+	return false
+}
+
+func traceContainsName(result TraceResult, name string) bool {
+	for _, node := range result.Nodes {
+		if node.Name == name {
 			return true
 		}
 	}

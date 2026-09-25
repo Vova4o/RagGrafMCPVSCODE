@@ -24,7 +24,7 @@ import (
 
 var skippedDirectories = map[string]struct{}{
 	".git": {}, ".hg": {}, ".svn": {}, ".idea": {}, ".vscode": {},
-	"vendor": {}, "node_modules": {}, ".codebase-graph": {},
+	"vendor": {}, "node_modules": {}, "dist": {}, "out": {}, ".codebase-graph": {},
 }
 
 var builtins = map[string]struct{}{

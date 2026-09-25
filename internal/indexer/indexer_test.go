@@ -121,6 +121,30 @@ export const load = async () => client();
 	}
 }
 
+func TestIndexIgnoresDistAndOutDirectories(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "src", "main.ts"), "export function source() {}\n")
+	writeTestFile(t, filepath.Join(root, "dist", "main.js"), "export function bundled() {}\n")
+	writeTestFile(t, filepath.Join(root, "out", "main.js"), "export function generated() {}\n")
+
+	value, err := New().Index(context.Background(), root)
+	if err != nil {
+		t.Fatalf("Index() error = %v", err)
+	}
+	if value.Coverage.IndexedFiles != 1 {
+		t.Fatalf("IndexedFiles = %d, want 1 source file", value.Coverage.IndexedFiles)
+	}
+	for _, node := range value.Nodes {
+		if node.File == "dist/main.js" || node.File == "out/main.js" {
+			t.Errorf("generated file was indexed: %#v", node)
+		}
+		if node.Name == "bundled" || node.Name == "generated" {
+			t.Errorf("generated declaration %q was indexed", node.Name)
+		}
+	}
+}
+
 func TestServiceReferencesRequireExplicitURL(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

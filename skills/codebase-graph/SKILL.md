@@ -61,6 +61,8 @@ the graph exists and identifies the correct repository tools.
 - Workspace overview: `get_workspace_architecture`
 - Declarations: `search_graph`
 - Callers/callees: `trace_path` with `edge_kinds: ["CALLS"]`
+- Class callers/callees: trace the class's `CONTAINS` methods, then inspect their
+  `CALLS` edges; class-level call results aggregate calls made by methods.
 - Imports: `query_graph` with `edge: "IMPORTS"`
 - Exact source: `get_code_snippet`
 - Literal source search: `search_code`
@@ -71,22 +73,30 @@ the graph exists and identifies the correct repository tools.
   resolution.
 - JavaScript, TypeScript, TSX, Python, Rust, Java, Kotlin, and C# use pure-Go
   syntax-tree extraction for declarations, methods, imports, direct calls, and
-  exact source line ranges. Direct calls resolve within the same file. Relative
-  JavaScript, TypeScript, and Python imports can resolve to same-repository files
-  when unambiguous; other imports remain external unless covered by those rules.
+  exact source line ranges. JavaScript/TypeScript parser recovery is bounded:
+  declarations and references inside syntax-tree `ERROR` or `MISSING` regions
+  are skipped, while recoverable regions outside them can still be indexed.
+  Type nodes contain their methods; class call traces aggregate method calls.
+  Constructor calls are recorded, including calls at file scope. Literal
+  JavaScript/TypeScript `import()` and `require()` paths are indexed as imports.
+  Relative JavaScript/TypeScript and Python imports can resolve to same-repository
+  files when unambiguous; other imports remain external unless covered by those
+  rules.
+- JavaScript/TypeScript calls through statically typed or inferred class fields
+  can resolve when the field's class is known. Resolution remains conservative:
+  ambiguous or unresolved targets stay external, and static analysis does not
+  promise dynamic dispatch, reflection, or runtime loading resolution.
 - SQL, shell, Ruby, PHP, C, C++, Protocol Buffers, Vue, Svelte, HTML, CSS, SCSS,
   YAML, TOML, JSON, XML, Dockerfile, and Makefile use older regex and file-level
   extraction. Do not assume syntax-tree-level declarations, call structure, or
   resolution for these languages.
-- Static analysis cannot reliably resolve dynamic dispatch, reflection, runtime
-  loading, or ambiguous calls; such targets remain external. Syntax parser failures
-  and syntax-parsed source files larger than 4 MiB are reported as skipped in index
-  coverage.
+- Syntax parser failures and syntax-parsed source files larger than 4 MiB are
+  reported as skipped in index coverage. Generated `dist/` and `out/` trees are
+  excluded, as are hidden directories, nested repositories, vendor trees,
+  `node_modules`, build output, and `.codebase-graph`.
 - `DEPENDS_ON` is inferred from indexed module imports or explicit service URLs
   matching another repository's identity. Treat it as source evidence, not proof
   that runtime traffic actually occurred.
-- Hidden directories, nested repositories, vendor trees, `node_modules`, build
-  output, and `.codebase-graph` are excluded from a repository graph.
 
 ## Safety
 

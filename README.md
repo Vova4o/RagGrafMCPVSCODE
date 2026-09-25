@@ -38,19 +38,32 @@ or language parity.
 | Languages | Current indexing capability |
 | --- | --- |
 | Go | Standard-library AST parsing for declarations, imports, and calls, with Go-specific symbol resolution. |
-| JavaScript, TypeScript, TSX, Python, Rust, Java, Kotlin, C# | Pure-Go syntax-tree parsing for declarations, methods, imports, direct calls, and exact source line ranges. Direct calls resolve within the same file; relative JavaScript, TypeScript, and Python imports can resolve to same-repository files when unambiguous. Other imports remain external unless resolved by those rules. |
+| JavaScript, TypeScript, TSX, Python, Rust, Java, Kotlin, C# | Pure-Go syntax-tree parsing for declarations, methods, imports, calls, and exact source line ranges. A small amount of parser recovery is tolerated so valid regions of mildly malformed files can still be indexed; files with extensive syntax errors are reported as skipped. |
 | SQL, shell, Ruby, PHP, C, C++, Protocol Buffers, Vue, Svelte, HTML, CSS, SCSS, YAML, TOML, JSON, XML, Dockerfile, Makefile | Older regex and file-level extraction for limited declarations, imports, dependencies, and direct-call patterns; these do not provide syntax-tree-level structure or resolution. |
 
-Static analysis cannot reliably resolve dynamic dispatch, reflection, runtime
-loading, or ambiguous calls; those targets remain external. For syntax-tree parsing,
-parser failures and source files larger than 4 MiB are reported as skipped in index
-coverage.
+Calls resolve conservatively. Direct calls can resolve to declarations in the same
+file, while unambiguous relative JavaScript, TypeScript, and Python imports can
+resolve to files in the same repository. JavaScript and TypeScript constructor calls
+such as `new Service()` are indexed as calls and can resolve to a known type. Literal
+JavaScript `import()` and `require()` paths are recorded as imports; only paths that
+match a same-repository file unambiguously resolve to that file. For JavaScript and
+TypeScript class methods, statically visible typed fields and fields initialized with
+`new Type()` can connect `this.field.method()` calls to methods of that type.
+
+These rules do not model arbitrary dependency-injection containers, field mutation,
+computed import paths, dynamic dispatch, reflection, runtime loading, or ambiguous
+matches; unresolved targets remain external. Parser recovery accepts only a limited
+number and span of syntax errors. Files with extensive syntax errors or source files
+larger than 4 MiB are reported as skipped in index coverage. Generated `dist/` and
+`out/` directories are excluded from indexing to avoid duplicate or compiled copies
+of source files.
 
 ### Roadmap
 
 - Add grammar-based syntax-tree extraction for the remaining indexed languages.
-- Deepen symbol resolution across files and repositories while keeping uncertain
-  targets explicit.
+- Extend dependency-injection and cross-file symbol resolution while keeping
+  uncertain targets explicit; runtime behavior and computed paths require more
+  information than static indexing can provide.
 
 ## Build and test
 

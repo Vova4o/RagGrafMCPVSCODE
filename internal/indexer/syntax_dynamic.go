@@ -30,6 +30,9 @@ func extractDynamicSyntax(ctx context.Context, root *gotreesitter.Node, lang *go
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if node == nil || node.IsError() || node.IsMissing() {
+			return nil
+		}
 		typ := syntaxNodeType(node, lang)
 		name := dynamicDeclarationName(node, lang, src, typ)
 		kind := dynamicDeclarationKind(node, lang, typ, language, len(scopes) > 0 && scopes[len(scopes)-1].kind == "class")
@@ -50,9 +53,20 @@ func extractDynamicSyntax(ctx context.Context, root *gotreesitter.Node, lang *go
 			if err := dynamicJSImports(node, lang, src, &facts); err != nil {
 				return err
 			}
+			if err := dynamicJSRuntimeImport(node, lang, src, &facts); err != nil {
+				return err
+			}
+			if binding, ok := dynamicBinding(node, lang, src, scopes, language); ok {
+				facts.Bindings = append(facts.Bindings, binding)
+			}
 		}
 		if target := dynamicCallTarget(node, lang, src, typ, language); target != "" {
 			facts.Calls = append(facts.Calls, syntaxCall{Target: target, StartByte: node.StartByte()})
+		}
+		if language != "python" && typ == "new_expression" {
+			if target := dynamicConstructorTarget(node, lang, src); target != "" {
+				facts.Calls = append(facts.Calls, syntaxCall{Target: target, StartByte: node.StartByte(), Constructor: true})
+			}
 		}
 		for i := 0; i < node.ChildCount(); i++ {
 			if err := visit(node.Child(i), scopes); err != nil {
@@ -257,18 +271,205 @@ func dynamicJSImports(n *gotreesitter.Node, lang *gotreesitter.Language, src []b
 			}
 		}
 	}
-	if typ == "variable_declarator" {
-		init := syntaxField(n, lang, "value")
-		if init != nil && syntaxNodeType(init, lang) == "call_expression" {
-			fn := syntaxField(init, lang, "function")
-			args := syntaxField(init, lang, "arguments")
-			if strings.TrimSpace(syntaxNodeText(fn, src)) == "require" && args != nil && args.ChildCount() > 0 {
-				path := dynamicString(args.Child(0), lang, src)
-				local := strings.TrimSpace(syntaxNodeText(syntaxField(n, lang, "name"), src))
-				if path != "" && local != "" {
-					facts.Imports = append(facts.Imports, syntaxImport{Path: path, Local: local, Imported: ""})
-				}
+	return nil
+}
+
+func dynamicJSRuntimeImport(n *gotreesitter.Node, lang *gotreesitter.Language, src []byte, facts *syntaxFacts) error {
+	typ := syntaxNodeType(n, lang)
+	if typ == "import_type" {
+		path := dynamicFirstLiteral(n, lang, src)
+		if path != "" && !dynamicHasImportPath(facts.Imports, path) {
+			facts.Imports = append(facts.Imports, syntaxImport{Path: path})
+		}
+		return nil
+	}
+	if typ != "call_expression" {
+		return nil
+	}
+	fn := syntaxField(n, lang, "function")
+	name := strings.TrimSpace(syntaxNodeText(fn, src))
+	if name != "require" && name != "import" {
+		return nil
+	}
+	args := syntaxField(n, lang, "arguments")
+	if args == nil || args.ChildCount() == 0 {
+		return nil
+	}
+	var firstArgument *gotreesitter.Node
+	for i := 0; i < args.ChildCount(); i++ {
+		if args.Child(i).IsNamed() {
+			firstArgument = args.Child(i)
+			break
+		}
+	}
+	path := dynamicFirstLiteral(firstArgument, lang, src)
+	if path == "" {
+		return nil
+	}
+	local := ""
+	if name == "require" && n.Parent() != nil && syntaxNodeType(n.Parent(), lang) == "variable_declarator" {
+		local = strings.TrimSpace(syntaxNodeText(syntaxField(n.Parent(), lang, "name"), src))
+	}
+	for _, imp := range facts.Imports {
+		if imp.Path == path && imp.Local == local && imp.Imported == "" {
+			return nil
+		}
+	}
+	facts.Imports = append(facts.Imports, syntaxImport{Path: path, Local: local})
+	return nil
+}
+
+func dynamicFirstLiteral(n *gotreesitter.Node, lang *gotreesitter.Language, src []byte) string {
+	if n == nil {
+		return ""
+	}
+	if path := dynamicString(n, lang, src); path != "" {
+		return path
+	}
+	for i := 0; i < n.ChildCount(); i++ {
+		if path := dynamicFirstLiteral(n.Child(i), lang, src); path != "" {
+			return path
+		}
+	}
+	return ""
+}
+
+func dynamicHasImportPath(imports []syntaxImport, path string) bool {
+	for _, imp := range imports {
+		if imp.Path == path {
+			return true
+		}
+	}
+	return false
+}
+
+func dynamicConstructorTarget(n *gotreesitter.Node, lang *gotreesitter.Language, src []byte) string {
+	for _, field := range []string{"constructor", "function", "constructor_type"} {
+		if child := syntaxField(n, lang, field); child != nil {
+			if name := dynamicSourceName(child, lang, src); name != "" {
+				return name
 			}
+			if name := strings.TrimSpace(syntaxNodeText(child, src)); name != "" {
+				return name
+			}
+		}
+	}
+	for i := 0; i < n.ChildCount(); i++ {
+		child := n.Child(i)
+		switch syntaxNodeType(child, lang) {
+		case "arguments", "type_arguments":
+			continue
+		}
+		if name := dynamicSourceName(child, lang, src); name != "" {
+			return name
+		}
+	}
+	return ""
+}
+
+func dynamicBinding(n *gotreesitter.Node, lang *gotreesitter.Language, src []byte, scopes []dynamicScope, language string) (syntaxBinding, bool) {
+	containerParts := make([]string, 0, len(scopes))
+	for _, scope := range scopes {
+		if scope.kind == "class" {
+			containerParts = append(containerParts, scope.name)
+		}
+	}
+	container := strings.Join(containerParts, ".")
+	if container == "" {
+		return syntaxBinding{}, false
+	}
+	typ := syntaxNodeType(n, lang)
+	if typ == "public_field_definition" || typ == "property_definition" {
+		name := strings.TrimSpace(syntaxNodeText(syntaxField(n, lang, "name"), src))
+		fieldType := syntaxField(n, lang, "type")
+		if fieldType == nil {
+			fieldType = syntaxField(n, lang, "type_annotation")
+		}
+		fieldTypeName := strings.TrimSpace(strings.TrimPrefix(syntaxNodeText(fieldType, src), ":"))
+		if fieldTypeName == "" {
+			fieldTypeName = dynamicConstructedType(syntaxField(n, lang, "value"), lang, src)
+		}
+		if name != "" && fieldTypeName != "" {
+			return syntaxBinding{Container: container, Field: name, Type: fieldTypeName}, true
+		}
+	}
+	if typ == "assignment_expression" || typ == "assignment" {
+		left, right := syntaxField(n, lang, "left"), syntaxField(n, lang, "right")
+		fieldName := dynamicThisField(left, lang, src)
+		constructedType := dynamicConstructedType(right, lang, src)
+		if fieldName != "" && constructedType != "" {
+			return syntaxBinding{Container: container, Field: fieldName, Type: constructedType}, true
+		}
+	}
+	if typ != "required_parameter" && typ != "optional_parameter" && typ != "parameter" {
+		return syntaxBinding{}, false
+	}
+	if !dynamicHasParameterPropertyModifier(n, lang, src) {
+		return syntaxBinding{}, false
+	}
+	nameNode := dynamicDescendantField(n, lang, "pattern")
+	if nameNode == nil {
+		nameNode = dynamicDescendantField(n, lang, "name")
+	}
+	name := strings.TrimSpace(syntaxNodeText(nameNode, src))
+	fieldType := strings.TrimSpace(syntaxNodeText(syntaxField(n, lang, "type"), src))
+	fieldType = strings.TrimSpace(strings.TrimPrefix(fieldType, ":"))
+	if name == "" || fieldType == "" {
+		return syntaxBinding{}, false
+	}
+	return syntaxBinding{Container: container, Field: name, Type: fieldType}, true
+}
+
+func dynamicConstructedType(n *gotreesitter.Node, lang *gotreesitter.Language, src []byte) string {
+	if n == nil || syntaxNodeType(n, lang) != "new_expression" {
+		return ""
+	}
+	return dynamicConstructorTarget(n, lang, src)
+}
+
+func dynamicThisField(n *gotreesitter.Node, lang *gotreesitter.Language, src []byte) string {
+	if n == nil {
+		return ""
+	}
+	if syntaxNodeType(n, lang) != "member_expression" && syntaxNodeType(n, lang) != "member_access_expression" {
+		return ""
+	}
+	object := syntaxField(n, lang, "object")
+	if strings.TrimSpace(syntaxNodeText(object, src)) != "this" {
+		return ""
+	}
+	return strings.TrimSpace(syntaxNodeText(syntaxField(n, lang, "property"), src))
+}
+
+func dynamicHasParameterPropertyModifier(n *gotreesitter.Node, lang *gotreesitter.Language, src []byte) bool {
+	var found bool
+	var visit func(*gotreesitter.Node)
+	visit = func(current *gotreesitter.Node) {
+		if current == nil || found {
+			return
+		}
+		if syntaxNodeType(current, lang) == "accessibility_modifier" {
+			switch strings.TrimSpace(syntaxNodeText(current, src)) {
+			case "public", "private", "protected":
+				found = true
+				return
+			}
+		}
+		for i := 0; i < current.ChildCount(); i++ {
+			visit(current.Child(i))
+		}
+	}
+	visit(n)
+	return found
+}
+
+func dynamicDescendantField(n *gotreesitter.Node, lang *gotreesitter.Language, field string) *gotreesitter.Node {
+	if result := syntaxField(n, lang, field); result != nil {
+		return result
+	}
+	for i := 0; i < n.ChildCount(); i++ {
+		if result := dynamicDescendantField(n.Child(i), lang, field); result != nil {
+			return result
 		}
 	}
 	return nil

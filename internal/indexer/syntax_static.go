@@ -196,6 +196,28 @@ func staticImport(n *gotreesitter.Node, typ string, lang *gotreesitter.Language,
 }
 
 func staticCall(n *gotreesitter.Node, typ string, lang *gotreesitter.Language, src []byte, language string) (syntaxCall, bool) {
+	constructorType := ""
+	switch language {
+	case "java", "c_sharp":
+		if typ == "object_creation_expression" || typ == "implicit_object_creation_expression" {
+			constructorType = syntaxNodeText(syntaxField(n, lang, "type"), src)
+		}
+	case "rust":
+		if typ == "struct_expression" {
+			constructorType = syntaxNodeText(syntaxField(n, lang, "name"), src)
+			if constructorType == "" {
+				constructorType = syntaxNodeText(syntaxField(n, lang, "type"), src)
+			}
+		}
+	case "kotlin":
+		if typ == "constructor_invocation" {
+			constructorType = staticFirstNodeText(n, lang, src, "user_type")
+		}
+	}
+	if constructorType != "" {
+		constructorType = strings.TrimSpace(constructorType)
+		return syntaxCall{Target: constructorType, StartByte: n.StartByte(), Constructor: true}, true
+	}
 	wanted := false
 	switch language {
 	case "rust", "kotlin":
@@ -242,6 +264,21 @@ func staticCall(n *gotreesitter.Node, typ string, lang *gotreesitter.Language, s
 		return syntaxCall{}, false
 	}
 	return syntaxCall{Target: target, StartByte: callee.StartByte()}, true
+}
+
+func staticFirstNodeText(n *gotreesitter.Node, lang *gotreesitter.Language, src []byte, wanted string) string {
+	if n == nil {
+		return ""
+	}
+	if syntaxNodeType(n, lang) == wanted {
+		return strings.TrimSpace(syntaxNodeText(n, src))
+	}
+	for i := 0; i < n.ChildCount(); i++ {
+		if result := staticFirstNodeText(n.Child(i), lang, src, wanted); result != "" {
+			return result
+		}
+	}
+	return ""
 }
 
 func isKotlinCallCallee(typ string) bool {

@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const providerID = 'codebaseGraph.repositories';
-const serverVersion = '0.2.6';
+const serverVersion = '0.2.7';
 const protocolVersion = '2025-06-18';
 
 function activate(context) {

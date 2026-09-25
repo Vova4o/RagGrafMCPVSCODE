@@ -17,14 +17,15 @@ type syntaxIndexedDeclaration struct {
 }
 
 type syntaxIndexedFile struct {
-	source       sourceFile
-	rel          string
-	payload      []byte
-	newlines     []int
-	node         graph.Node
-	facts        syntaxFacts
-	declarations []syntaxIndexedDeclaration
-	importFiles  map[string]string
+	source              sourceFile
+	rel                 string
+	payload             []byte
+	newlines            []int
+	node                graph.Node
+	facts               syntaxFacts
+	declarations        []syntaxIndexedDeclaration
+	declarationsByScope map[string][]syntaxIndexedDeclaration
+	importFiles         map[string]string
 }
 
 func isSyntaxCoreLanguage(language string) bool {
@@ -39,6 +40,7 @@ func isSyntaxCoreLanguage(language string) bool {
 func indexSyntaxCore(ctx context.Context, root, modulePath string, files []sourceFile, projectNode graph.Node, value *graph.Graph, edges map[string]graph.Edge) error {
 	indexed := make([]*syntaxIndexedFile, 0)
 	byPath := make(map[string]*syntaxIndexedFile)
+	byID := make(map[string]*syntaxIndexedFile)
 	externalIDs := make(map[string]string)
 	for _, source := range files {
 		if !isSyntaxCoreLanguage(source.Language) {
@@ -84,6 +86,7 @@ func indexSyntaxCore(ctx context.Context, root, modulePath string, files []sourc
 			importFiles: make(map[string]string)}
 		indexed = append(indexed, entry)
 		byPath[rel] = entry
+		byID[fileNode.ID] = entry
 	}
 
 	// Build every file and declaration before resolving any call edges.
@@ -129,6 +132,19 @@ func indexSyntaxCore(ctx context.Context, root, modulePath string, files []sourc
 			file.declarations = append(file.declarations, syntaxIndexedDeclaration{fact: fact, node: node})
 			value.Nodes = append(value.Nodes, node)
 			addEdge(edges, file.node.ID, node.ID, graph.EdgeDefines)
+		}
+		file.declarationsByScope = make(map[string][]syntaxIndexedDeclaration)
+		for _, declaration := range file.declarations {
+			key := syntaxDeclarationKey(declaration.fact.Container, declaration.fact.Name)
+			file.declarationsByScope[key] = append(file.declarationsByScope[key], declaration)
+		}
+		for _, declaration := range file.declarations {
+			if declaration.node.Kind != graph.KindMethod || declaration.fact.Container == "" {
+				continue
+			}
+			if class := declarationNamed(file, declaration.fact.Container, "", graph.KindType); class != nil {
+				addEdge(edges, class.node.ID, declaration.node.ID, graph.EdgeContains)
+			}
 		}
 	}
 
@@ -181,9 +197,19 @@ func indexSyntaxCore(ctx context.Context, root, modulePath string, files []sourc
 			}
 			source := enclosingSyntaxDeclaration(file.declarations, call.StartByte)
 			if source == nil {
-				continue
+				if !call.Constructor {
+					continue
+				}
 			}
-			targets := resolveSyntaxCall(file, source.fact, call.Target, indexed)
+			caller := file.node
+			if source != nil {
+				caller = source.node
+			}
+			callerFact := syntaxDeclaration{}
+			if source != nil {
+				callerFact = source.fact
+			}
+			targets := resolveSyntaxCall(file, callerFact, call, byID, byPath)
 			var targetID string
 			if len(targets) == 1 {
 				targetID = targets[0].node.ID
@@ -199,7 +225,7 @@ func indexSyntaxCore(ctx context.Context, root, modulePath string, files []sourc
 					externalIDs[key] = targetID
 				}
 			}
-			addEdge(edges, source.node.ID, targetID, graph.EdgeCalls)
+			addEdge(edges, caller.ID, targetID, graph.EdgeCalls)
 		}
 	}
 	return nil
@@ -263,10 +289,23 @@ func syntaxCallName(target string) string {
 	return target
 }
 
-func resolveSyntaxCall(file *syntaxIndexedFile, caller syntaxDeclaration, target string, all []*syntaxIndexedFile) []syntaxIndexedDeclaration {
+func resolveSyntaxCall(file *syntaxIndexedFile, caller syntaxDeclaration, call syntaxCall, byID, byPath map[string]*syntaxIndexedFile) []syntaxIndexedDeclaration {
+	target := call.Target
 	name := syntaxCallName(target)
+	if call.Constructor {
+		name = strings.TrimSpace(strings.TrimPrefix(name, "new "))
+	}
 	if name == "" {
 		return nil
+	}
+	if call.Constructor {
+		if index := strings.LastIndexAny(target, ".:"); index >= 0 {
+			qualifier := target[:index]
+			if fileID := file.importFiles[qualifier]; fileID != "" {
+				return declarationsInFilesOfKind(byID, fileID, name, graph.KindType)
+			}
+		}
+		return resolveSyntaxType(file, name, byID)
 	}
 	qualifier := ""
 	if index := strings.LastIndexAny(target, ".:"); index >= 0 {
@@ -275,13 +314,25 @@ func resolveSyntaxCall(file *syntaxIndexedFile, caller syntaxDeclaration, target
 	if qualifier == "this" || qualifier == "self" {
 		return declarationsNamed(file, name, caller.Container)
 	}
+	if strings.HasPrefix(qualifier, "this.") || strings.HasPrefix(qualifier, "self.") {
+		field := qualifier[strings.LastIndex(qualifier, ".")+1:]
+		for _, binding := range file.facts.Bindings {
+			if binding.Container != caller.Container || binding.Field != field {
+				continue
+			}
+			if declarations := methodsOfType(file, binding.Type, name, byID, byPath); len(declarations) > 0 {
+				return declarations
+			}
+		}
+		return nil
+	}
 	if qualifier != "" {
 		localQualified := declarationsNamed(file, name, qualifier)
 		if len(localQualified) > 0 {
 			return localQualified
 		}
 		if fileID := file.importFiles[qualifier]; fileID != "" {
-			return declarationsInFiles(all, []string{fileID}, name)
+			return declarationsInFiles(byID, []string{fileID}, name)
 		}
 		return nil
 	}
@@ -298,7 +349,7 @@ func resolveSyntaxCall(file *syntaxIndexedFile, caller syntaxDeclaration, target
 				if imported == "" {
 					imported = name
 				}
-				return declarationsInFiles(all, []string{fileID}, imported)
+				return declarationsInFiles(byID, []string{fileID}, imported)
 			}
 		}
 	}
@@ -327,30 +378,104 @@ func syntaxCallScopes(caller syntaxDeclaration) []string {
 
 func declarationsNamed(file *syntaxIndexedFile, name, container string) []syntaxIndexedDeclaration {
 	var matches []syntaxIndexedDeclaration
-	for _, declaration := range file.declarations {
-		if declaration.fact.Name != name || declaration.node.Kind == graph.KindType {
-			continue
+	for _, declaration := range file.declarationsByScope[syntaxDeclarationKey(container, name)] {
+		if declaration.node.Kind != graph.KindType {
+			matches = append(matches, declaration)
 		}
-		if declaration.fact.Container != container {
-			continue
-		}
-		matches = append(matches, declaration)
 	}
 	return matches
 }
 
-func declarationsInFiles(files []*syntaxIndexedFile, ids []string, name string) []syntaxIndexedDeclaration {
-	wanted := make(map[string]bool, len(ids))
-	for _, id := range ids {
-		wanted[id] = true
+func syntaxDeclarationKey(container, name string) string { return container + "\x00" + name }
+
+func declarationNamed(file *syntaxIndexedFile, name, container string, kind string) *syntaxIndexedDeclaration {
+	if file == nil {
+		return nil
 	}
+	for index := range file.declarationsByScope[syntaxDeclarationKey(container, name)] {
+		declaration := &file.declarationsByScope[syntaxDeclarationKey(container, name)][index]
+		if declaration.node.Kind == kind {
+			return declaration
+		}
+	}
+	return nil
+}
+
+func resolveSyntaxType(file *syntaxIndexedFile, name string, byID map[string]*syntaxIndexedFile) []syntaxIndexedDeclaration {
+	if matches := declarationsOfKind(file, name, graph.KindType); len(matches) > 0 {
+		return matches
+	}
+	if fileID := file.importFiles[name]; fileID != "" {
+		for _, imp := range file.facts.Imports {
+			if imp.Local == name {
+				imported := imp.Imported
+				if imported == "default" {
+					matches := declarationsInFilesOfKind(byID, fileID, "", graph.KindType)
+					if len(matches) == 1 {
+						return matches
+					}
+				}
+				if imported == "" || imported == "*" {
+					imported = name
+				}
+				return declarationsInFilesOfKind(byID, fileID, imported, graph.KindType)
+			}
+		}
+	}
+	return nil
+}
+
+func methodsOfType(file *syntaxIndexedFile, typeName, method string, byID, byPath map[string]*syntaxIndexedFile) []syntaxIndexedDeclaration {
+	types := resolveSyntaxType(file, typeName, byID)
+	if len(types) != 1 {
+		return nil
+	}
+	typeDecl := types[0]
+	candidate := byPath[typeDecl.node.File]
+	if candidate == nil {
+		return nil
+	}
+	return declarationsNamed(candidate, method, typeDecl.fact.Name)
+}
+
+func declarationsOfKind(file *syntaxIndexedFile, name, kind string) []syntaxIndexedDeclaration {
 	var matches []syntaxIndexedDeclaration
-	for _, file := range files {
-		if !wanted[file.node.ID] {
+	for _, declaration := range file.declarationsByScope[syntaxDeclarationKey("", name)] {
+		if declaration.node.Kind == kind {
+			matches = append(matches, declaration)
+		}
+	}
+	return matches
+}
+
+func declarationsInFilesOfKind(files map[string]*syntaxIndexedFile, fileID, name, kind string) []syntaxIndexedDeclaration {
+	file := files[fileID]
+	if file != nil {
+		if name == "" {
+			var matches []syntaxIndexedDeclaration
+			for _, declarations := range file.declarationsByScope {
+				for _, declaration := range declarations {
+					if declaration.node.Kind == kind {
+						matches = append(matches, declaration)
+					}
+				}
+			}
+			return matches
+		}
+		return declarationsOfKind(file, name, kind)
+	}
+	return nil
+}
+
+func declarationsInFiles(files map[string]*syntaxIndexedFile, ids []string, name string) []syntaxIndexedDeclaration {
+	var matches []syntaxIndexedDeclaration
+	for _, id := range ids {
+		file := files[id]
+		if file == nil {
 			continue
 		}
-		for _, declaration := range file.declarations {
-			if declaration.fact.Name == name && declaration.node.Kind != graph.KindType {
+		for _, declaration := range file.declarationsByScope[syntaxDeclarationKey("", name)] {
+			if declaration.node.Kind != graph.KindType {
 				matches = append(matches, declaration)
 			}
 		}

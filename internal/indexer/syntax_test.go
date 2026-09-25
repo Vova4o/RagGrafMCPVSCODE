@@ -301,6 +301,84 @@ func TestIndexSyntaxRecordsParseErrorInCoverage(t *testing.T) {
 	}
 }
 
+func TestIndexSyntaxKeepsDeclarationsAroundRecoverableTypeScriptError(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "recoverable.ts"), "export function keep() { return 1; }\nconst broken = ;\nexport class AlsoKeep {}\n")
+	writeTestFile(t, filepath.Join(root, "malformed.ts"), "export function {\n")
+
+	value, err := New().Index(context.Background(), root)
+	if err != nil {
+		t.Fatalf("Index() error = %v", err)
+	}
+	for _, name := range []string{"keep", "AlsoKeep"} {
+		if !containsGraphNode(value, "recoverable.ts", name) {
+			t.Errorf("recoverable declaration %q was not indexed", name)
+		}
+	}
+	if containsGraphNode(value, "malformed.ts", "") {
+		t.Fatal("malformed file unexpectedly produced a file node")
+	}
+	if len(value.Coverage.SkippedFiles) != 1 || value.Coverage.SkippedFiles[0].File != "malformed.ts" {
+		t.Fatalf("SkippedFiles = %#v, want only malformed.ts", value.Coverage.SkippedFiles)
+	}
+}
+
+func TestIndexSyntaxLinksConstructorsAndDynamicImports(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "main.ts"), "import { Widget } from './widget';\n"+
+		"export const widget = new Widget();\n"+
+		"import('./runtime');\n"+
+		"require('./required');\n"+
+		"type Alias = import('./types').WidgetType;\n")
+	writeTestFile(t, filepath.Join(root, "widget.ts"), "export class Widget {}\n")
+	writeTestFile(t, filepath.Join(root, "runtime.ts"), "export const ready = true;\n")
+	writeTestFile(t, filepath.Join(root, "required.ts"), "export const ready = true;\n")
+	writeTestFile(t, filepath.Join(root, "types.ts"), "export interface WidgetType {}\n")
+
+	value, err := New().Index(context.Background(), root)
+	if err != nil {
+		t.Fatalf("Index() error = %v", err)
+	}
+	mainFile := syntaxGraphNode(t, value, "main.ts", "main.ts", graph.KindFile)
+	widgetType := syntaxGraphNode(t, value, "widget.ts", "Widget", graph.KindType)
+	assertGraphEdge(t, value, mainFile.ID, widgetType.ID, graph.EdgeCalls)
+	for _, file := range []string{"widget.ts", "runtime.ts", "required.ts", "types.ts"} {
+		target := syntaxGraphNode(t, value, file, filepath.Base(file), graph.KindFile)
+		if !hasGraphEdge(value, mainFile.ID, target.ID, graph.EdgeImports) {
+			t.Errorf("missing IMPORTS edge main.ts -> %s", file)
+		}
+	}
+}
+
+func TestIndexSyntaxCreatesTypeContainsMethodEdges(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "service.ts"), "class Store { save() {} }\n")
+	value, err := New().Index(context.Background(), root)
+	if err != nil {
+		t.Fatalf("Index() error = %v", err)
+	}
+	store := syntaxGraphNode(t, value, "service.ts", "Store", graph.KindType)
+	save := syntaxGraphNode(t, value, "service.ts", "save", graph.KindMethod)
+	assertGraphEdge(t, value, store.ID, save.ID, graph.EdgeContains)
+}
+
+func TestIndexSyntaxResolvesInjectedFieldCallToImportedMethod(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "controller.ts"), "import { Store } from './store';\n"+"class Controller {\n  private store: Store;\n  run() { this.store.save(); }\n}\n")
+	writeTestFile(t, filepath.Join(root, "store.ts"), "export class Store { save() {} }\n")
+	value, err := New().Index(context.Background(), root)
+	if err != nil {
+		t.Fatalf("Index() error = %v", err)
+	}
+	run := syntaxGraphNode(t, value, "controller.ts", "run", graph.KindMethod)
+	save := syntaxGraphNode(t, value, "store.ts", "save", graph.KindMethod)
+	assertGraphEdge(t, value, run.ID, save.ID, graph.EdgeCalls)
+}
+
 func TestIndexSyntaxRecognizesAdditionalTypeScriptAndPythonStubExtensions(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -416,6 +494,15 @@ func graphNodeByID(value *graph.Graph, id string) graph.Node {
 func hasCallTargetNamed(value *graph.Graph, sourceID, name string) bool {
 	for _, edge := range value.Edges {
 		if edge.From == sourceID && edge.Kind == graph.EdgeCalls && graphNodeByID(value, edge.To).Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func containsGraphNode(value *graph.Graph, file, name string) bool {
+	for _, node := range value.Nodes {
+		if node.File == file && (name == "" || node.Name == name) {
 			return true
 		}
 	}

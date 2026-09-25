@@ -27,14 +27,22 @@ type syntaxImport struct {
 }
 
 type syntaxCall struct {
-	Target    string
-	StartByte uint32
+	Target      string
+	StartByte   uint32
+	Constructor bool
+}
+
+type syntaxBinding struct {
+	Container string
+	Field     string
+	Type      string
 }
 
 type syntaxFacts struct {
 	Declarations []syntaxDeclaration
 	Imports      []syntaxImport
 	Calls        []syntaxCall
+	Bindings     []syntaxBinding
 }
 
 func parseSyntax(ctx context.Context, language, filename string, src []byte) (syntaxFacts, error) {
@@ -76,14 +84,51 @@ func parseSyntax(ctx context.Context, language, filename string, src []byte) (sy
 	if tree == nil || tree.RootNode() == nil {
 		return syntaxFacts{}, fmt.Errorf("parse %s syntax: parser returned no tree", filename)
 	}
-	if tree.RootNode().HasError() {
-		return syntaxFacts{}, fmt.Errorf("parse %s syntax: source contains syntax errors", filename)
+	recoverable, err := recoverableSyntaxTree(ctx, tree.RootNode(), src)
+	if err != nil {
+		return syntaxFacts{}, err
+	}
+	if !recoverable {
+		return syntaxFacts{}, fmt.Errorf("parse %s syntax: source contains extensive syntax errors", filename)
 	}
 
 	if grammarName == "javascript" || grammarName == "typescript" || grammarName == "tsx" || grammarName == "python" {
 		return extractDynamicSyntax(ctx, tree.RootNode(), lang, src, grammarName)
 	}
 	return extractStaticSyntax(ctx, tree.RootNode(), lang, src, grammarName)
+}
+
+// recoverableSyntaxTree accepts partial trees when the parser found a small
+// amount of malformed syntax, while rejecting trees where too much source was
+// lost to recovery.
+func recoverableSyntaxTree(ctx context.Context, root *gotreesitter.Node, src []byte) (bool, error) {
+	if root == nil {
+		return false, nil
+	}
+	stack := []*gotreesitter.Node{root}
+	var errorCount, errorBytes int
+	for len(stack) > 0 {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		node := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if node.IsError() || node.IsMissing() {
+			errorCount++
+			if end, start := int(node.EndByte()), int(node.StartByte()); end >= start {
+				errorBytes += end - start
+			}
+		}
+		for i := 0; i < node.ChildCount(); i++ {
+			stack = append(stack, node.Child(i))
+		}
+	}
+	if errorCount == 0 {
+		return true, nil
+	}
+	// A few isolated grammar recovery nodes are common in otherwise useful
+	// source files. Larger or widespread recovery is too uncertain to index.
+	return errorCount <= 32 && errorBytes <= len(src)/50, nil
 }
 
 func syntaxGrammarName(language, filename string) (string, error) {
@@ -146,6 +191,9 @@ func walkSyntaxNamed(ctx context.Context, root *gotreesitter.Node, visit func(*g
 		i := len(stack) - 1
 		node := stack[i]
 		stack = stack[:i]
+		if node == nil || node.IsError() || node.IsMissing() {
+			continue
+		}
 		if node.IsNamed() && !visit(node) {
 			continue
 		}

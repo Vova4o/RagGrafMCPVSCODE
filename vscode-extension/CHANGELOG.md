@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.65
+
+- Tolerate limited syntax errors and index recoverable regions of source files.
+- Record JavaScript and TypeScript constructor calls, literal dynamic imports and
+  `require()` dependencies, and statically identifiable class-field method calls.
+- Exclude generated `dist/` and `out/` directories from repository indexing.
+- Document current resolution behavior, recovery limits, and remaining static-analysis
+  gaps.
+
 ## 0.2.64
 
 - Add pure-Go syntax-tree indexing for JavaScript, TypeScript, TSX, Python, Rust,

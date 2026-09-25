@@ -183,38 +183,79 @@ func (s *Service) Trace(repoPath, symbol, direction string, depth, limit int, ed
 		allowedKinds[strings.ToUpper(kind)] = struct{}{}
 	}
 	nodeByID := make(map[string]graph.Node, len(value.Nodes))
+	outgoing := make(map[string][]graph.Edge, len(value.Nodes))
+	incoming := make(map[string][]graph.Edge, len(value.Nodes))
 	for _, node := range value.Nodes {
 		nodeByID[node.ID] = node
+	}
+	for _, edge := range value.Edges {
+		outgoing[edge.From] = append(outgoing[edge.From], edge)
+		incoming[edge.To] = append(incoming[edge.To], edge)
+	}
+	for id := range outgoing {
+		sort.Slice(outgoing[id], func(a, b int) bool { return edgeKey(outgoing[id][a]) < edgeKey(outgoing[id][b]) })
+	}
+	for id := range incoming {
+		sort.Slice(incoming[id], func(a, b int) bool { return edgeKey(incoming[id][a]) < edgeKey(incoming[id][b]) })
 	}
 
 	seenNodes := map[string]struct{}{root.ID: {}}
 	seenEdges := make(map[string]graph.Edge)
 	frontier := []string{root.ID}
 	truncated := false
+	aggregateMethods := root.Kind == "Type"
+	if _, requested := allowedKinds[graph.EdgeCalls]; !requested {
+		aggregateMethods = false
+	}
 	for level := 0; level < depth && len(frontier) > 0; level++ {
 		nextSet := make(map[string]struct{})
 		for _, current := range frontier {
-			for _, edge := range value.Edges {
+			edges := make([]graph.Edge, 0, len(outgoing[current])+len(incoming[current]))
+			if direction == "outbound" || direction == "both" {
+				edges = append(edges, outgoing[current]...)
+			}
+			if direction == "inbound" || direction == "both" {
+				edges = append(edges, incoming[current]...)
+			}
+			if aggregateMethods && current == root.ID {
+				for _, edge := range outgoing[root.ID] {
+					if edge.Kind == graph.EdgeContains && edge.From == root.ID {
+						method, exists := nodeByID[edge.To]
+						if exists && method.Kind == "Method" {
+							edges = append(edges, edge)
+						}
+					}
+				}
+			}
+			for _, edge := range edges {
 				if len(allowedKinds) > 0 {
-					if _, ok := allowedKinds[edge.Kind]; !ok {
+					if _, ok := allowedKinds[edge.Kind]; !ok && !(aggregateMethods && edge.Kind == graph.EdgeContains && edge.From == root.ID) {
 						continue
 					}
 				}
 				neighbor := ""
-				if (direction == "outbound" || direction == "both") && edge.From == current {
+				structuralMethodEdge := aggregateMethods && current == root.ID && edge.Kind == graph.EdgeContains && edge.From == root.ID
+				if structuralMethodEdge {
 					neighbor = edge.To
 				}
-				if (direction == "inbound" || direction == "both") && edge.To == current {
+				if neighbor == "" && (direction == "outbound" || direction == "both") && edge.From == current {
+					neighbor = edge.To
+				}
+				if neighbor == "" && (direction == "inbound" || direction == "both") && edge.To == current {
 					neighbor = edge.From
 				}
 				if neighbor == "" {
+					continue
+				}
+				key := edgeKey(edge)
+				if _, exists := seenEdges[key]; exists {
 					continue
 				}
 				if len(seenEdges) >= limit {
 					truncated = true
 					continue
 				}
-				seenEdges[edgeKey(edge)] = edge
+				seenEdges[key] = edge
 				if _, exists := seenNodes[neighbor]; !exists {
 					seenNodes[neighbor] = struct{}{}
 					nextSet[neighbor] = struct{}{}
