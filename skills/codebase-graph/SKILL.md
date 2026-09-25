@@ -67,10 +67,21 @@ the graph exists and identifies the correct repository tools.
 
 ## Accuracy boundaries
 
-- Go syntax is parsed with the Go AST and supports direct same-package, imported,
-  and unambiguous method calls.
-- Other languages use deterministic structural extraction. Dynamic dispatch,
-  reflection, runtime loading, and ambiguous calls may remain external targets.
+- Go syntax is parsed with the Go AST and uses Go-specific import and call
+  resolution.
+- JavaScript, TypeScript, TSX, Python, Rust, Java, Kotlin, and C# use pure-Go
+  syntax-tree extraction for declarations, methods, imports, direct calls, and
+  exact source line ranges. Direct calls resolve within the same file. Relative
+  JavaScript, TypeScript, and Python imports can resolve to same-repository files
+  when unambiguous; other imports remain external unless covered by those rules.
+- SQL, shell, Ruby, PHP, C, C++, Protocol Buffers, Vue, Svelte, HTML, CSS, SCSS,
+  YAML, TOML, JSON, XML, Dockerfile, and Makefile use older regex and file-level
+  extraction. Do not assume syntax-tree-level declarations, call structure, or
+  resolution for these languages.
+- Static analysis cannot reliably resolve dynamic dispatch, reflection, runtime
+  loading, or ambiguous calls; such targets remain external. Syntax parser failures
+  and syntax-parsed source files larger than 4 MiB are reported as skipped in index
+  coverage.
 - `DEPENDS_ON` is inferred from indexed module imports or explicit service URLs
   matching another repository's identity. Treat it as source evidence, not proof
   that runtime traffic actually occurred.

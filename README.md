@@ -31,10 +31,26 @@ duplicated per client.
 
 ## Languages
 
-The indexer recognizes Go, TypeScript, JavaScript, Python, SQL, shell, Rust, Java,
-Kotlin, Ruby, PHP, C#, C, C++, Protocol Buffers, HTML, CSS, SCSS, Vue, and Svelte.
-Go uses the standard library AST parser. Other languages use deterministic structural
-parsers for files, declarations, imports, dependencies, and direct calls.
+The indexer recognizes the languages below. Support is intentionally described by
+the parser and graph facts currently available; it does not imply equal parse quality
+or language parity.
+
+| Languages | Current indexing capability |
+| --- | --- |
+| Go | Standard-library AST parsing for declarations, imports, and calls, with Go-specific symbol resolution. |
+| JavaScript, TypeScript, TSX, Python, Rust, Java, Kotlin, C# | Pure-Go syntax-tree parsing for declarations, methods, imports, direct calls, and exact source line ranges. Direct calls resolve within the same file; relative JavaScript, TypeScript, and Python imports can resolve to same-repository files when unambiguous. Other imports remain external unless resolved by those rules. |
+| SQL, shell, Ruby, PHP, C, C++, Protocol Buffers, Vue, Svelte, HTML, CSS, SCSS, YAML, TOML, JSON, XML, Dockerfile, Makefile | Older regex and file-level extraction for limited declarations, imports, dependencies, and direct-call patterns; these do not provide syntax-tree-level structure or resolution. |
+
+Static analysis cannot reliably resolve dynamic dispatch, reflection, runtime
+loading, or ambiguous calls; those targets remain external. For syntax-tree parsing,
+parser failures and source files larger than 4 MiB are reported as skipped in index
+coverage.
+
+### Roadmap
+
+- Add grammar-based syntax-tree extraction for the remaining indexed languages.
+- Deepen symbol resolution across files and repositories while keeping uncertain
+  targets explicit.
 
 ## Build and test
 

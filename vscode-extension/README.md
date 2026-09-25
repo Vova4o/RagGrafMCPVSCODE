@@ -16,6 +16,20 @@ one aggregate graph per opened workspace.
 All agents share those files. The extension does not create agent-specific indexes
 and does not run a daemon or watcher.
 
+## Language coverage
+
+Go uses the standard-library AST. JavaScript, TypeScript, TSX, Python, Rust, Java,
+Kotlin, and C# use pure-Go syntax-tree parsing for declarations, methods, imports,
+direct calls, and exact source line ranges, with conservative same-repository
+resolution limited to same-file direct calls and unambiguous relative JavaScript,
+TypeScript, and Python imports to files in that repository. Other imports remain
+external unless covered by those rules. SQL, shell, Ruby, PHP, C, C++, Protocol
+Buffers, Vue, Svelte, HTML, CSS, SCSS, and configuration formats use older regex and
+file-level fallback extraction. Dynamic dispatch, reflection, runtime loading, and
+ambiguous calls remain external; syntax parser failures and syntax-parsed files larger
+than 4 MiB appear in index coverage. Broader cross-file and cross-repository symbol
+resolution and grammar-based support for the remaining languages are planned.
+
 ## Commands
 
 - `Codebase Graph: Index Workspace`

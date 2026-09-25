@@ -36,6 +36,8 @@ for (const target of selectedTargets) {
   const result = childProcess.spawnSync('go', [
     'build',
     '-trimpath',
+    '-tags',
+    'grammar_subset grammar_subset_javascript grammar_subset_typescript grammar_subset_tsx grammar_subset_python grammar_subset_rust grammar_subset_java grammar_subset_kotlin grammar_subset_c_sharp',
     '-o',
     output,
     './cmd/codebase-graph-mcp'

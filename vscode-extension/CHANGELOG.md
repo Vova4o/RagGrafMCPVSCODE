@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.64
+
+- Add pure-Go syntax-tree indexing for JavaScript, TypeScript, TSX, Python, Rust,
+  Java, Kotlin, and C#, including declarations, methods, imports, direct calls,
+  and exact source line ranges. Resolve direct calls within the same file and
+  unambiguous relative JavaScript, TypeScript, and Python imports to files in the
+  same repository; other imports remain external unless covered by those rules.
+- Report syntax parser failures and syntax-parsed files larger than 4 MiB in index
+  coverage.
+- Document the remaining languages' regex and file-level fallback, static-analysis
+  limits, and roadmap for broader grammar and symbol-resolution support.
+
 ## 0.2.63
 
 - Prevent workspace MCP configuration from depending on disposable versioned

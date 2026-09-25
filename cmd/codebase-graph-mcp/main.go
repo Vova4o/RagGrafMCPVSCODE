@@ -25,7 +25,7 @@ func run() error {
 	version := flag.Bool("version", false, "print the server version")
 	flag.Parse()
 	if *version {
-		fmt.Println("codebase-graph-mcp 0.2.5")
+		fmt.Println("codebase-graph-mcp 0.2.6")
 		return nil
 	}
 	if *repo != "" && *workspace != "" {

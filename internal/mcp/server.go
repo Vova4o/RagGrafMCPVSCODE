@@ -17,7 +17,7 @@ import (
 
 const (
 	serverName    = "codebase-graph"
-	serverVersion = "0.2.5"
+	serverVersion = "0.2.6"
 	protocol      = "2025-06-18"
 )
 

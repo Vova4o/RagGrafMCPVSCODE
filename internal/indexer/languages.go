@@ -16,8 +16,8 @@ import (
 const maximumSourceSize = 4 * 1024 * 1024
 
 var extensionLanguages = map[string]string{
-	".go": "go", ".ts": "typescript", ".tsx": "typescript", ".js": "javascript",
-	".jsx": "javascript", ".mjs": "javascript", ".cjs": "javascript", ".py": "python",
+	".go": "go", ".ts": "typescript", ".tsx": "typescript", ".mts": "typescript", ".cts": "typescript", ".js": "javascript",
+	".jsx": "javascript", ".mjs": "javascript", ".cjs": "javascript", ".py": "python", ".pyi": "python",
 	".sql": "sql", ".sh": "shell", ".bash": "shell", ".zsh": "shell", ".rs": "rust",
 	".java": "java", ".kt": "kotlin", ".kts": "kotlin", ".rb": "ruby", ".php": "php",
 	".cs": "csharp", ".c": "c", ".cc": "cpp", ".cpp": "cpp", ".h": "c",
@@ -102,9 +102,12 @@ func indexAdditional(
 	value *graph.Graph,
 	edges map[string]graph.Edge,
 ) error {
+	if err := indexSyntaxCore(ctx, root, modulePath, files, projectNode, value, edges); err != nil {
+		return err
+	}
 	externalIDs := make(map[string]string)
 	for _, source := range files {
-		if source.Language == "go" {
+		if source.Language == "go" || isSyntaxCoreLanguage(source.Language) {
 			continue
 		}
 		if err := ctx.Err(); err != nil {
