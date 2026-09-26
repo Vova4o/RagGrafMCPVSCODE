@@ -104,6 +104,8 @@ func (i *Indexer) Index(ctx context.Context, repoPath string) (*graph.Graph, err
 	functionsByPackage := make(map[string]map[string]string)
 	methodsByPackage := make(map[string]map[string][]string)
 	methodsByName := make(map[string][]string)
+	funcPositionIndex := make(map[string]string)
+	typePositionIndex := make(map[string]string)
 	edges := make(map[string]graph.Edge)
 
 	for _, source := range files {
@@ -209,7 +211,33 @@ func (i *Indexer) Index(ctx context.Context, repoPath string) (*graph.Graph, err
 					}
 					g.Nodes = append(g.Nodes, node)
 					nodesByQualified[qualified] = node
+					typePositionIndex[positionKey(rel, declOffset(fset, typeSpec.Name.Pos()))] = node.ID
 					addEdge(edges, fileNode.ID, node.ID, graph.EdgeDefines)
+
+					if iface, ok := typeSpec.Type.(*ast.InterfaceType); ok && iface.Methods != nil {
+						for _, method := range iface.Methods.List {
+							funcType, ok := method.Type.(*ast.FuncType)
+							if !ok {
+								continue
+							}
+							for _, methodName := range method.Names {
+								methodQualified := qualified + "." + methodName.Name
+								line := fset.Position(methodName.Pos()).Line
+								methodNode := graph.Node{
+									ID:   nodeID(graph.KindMethod, methodQualified, rel, line),
+									Kind: graph.KindMethod, Name: methodName.Name, QualifiedName: methodQualified,
+									Package: packageQ, File: rel,
+									StartLine: line, EndLine: line,
+									Detail:   interfaceMethodDetail(fset, methodName.Name, funcType),
+									Language: "go",
+								}
+								g.Nodes = append(g.Nodes, methodNode)
+								nodesByQualified[methodQualified] = methodNode
+								funcPositionIndex[positionKey(rel, declOffset(fset, methodName.Pos()))] = methodNode.ID
+								addEdge(edges, fileNode.ID, methodNode.ID, graph.EdgeDefines)
+							}
+						}
+					}
 				}
 			case *ast.FuncDecl:
 				receiver := receiverName(d)
@@ -231,6 +259,7 @@ func (i *Indexer) Index(ctx context.Context, repoPath string) (*graph.Graph, err
 				g.Nodes = append(g.Nodes, node)
 				nodesByQualified[qualified] = node
 				declarationIDs[d] = node.ID
+				funcPositionIndex[positionKey(rel, declOffset(fset, d.Name.Pos()))] = node.ID
 				addEdge(edges, fileNode.ID, node.ID, graph.EdgeDefines)
 				if receiver == "" {
 					functionsByPackage[packageQ][d.Name.Name] = node.ID
@@ -251,15 +280,24 @@ func (i *Indexer) Index(ctx context.Context, repoPath string) (*graph.Graph, err
 		for _, importPath := range file.importPath {
 			g.Dependencies = append(g.Dependencies, importPath)
 			g.ImportPaths = append(g.ImportPaths, importPath)
-			target, exists := nodesByQualified[importPath]
-			if !exists {
-				target = externalNode(importPath, filepath.Base(importPath), "package")
-				nodesByQualified[importPath] = target
-				g.Nodes = append(g.Nodes, target)
-			}
-			addEdge(edges, file.packageID, target.ID, graph.EdgeImports)
+			targetID := ensureExternal(g, nodesByQualified, importPath, filepath.Base(importPath), "package")
+			addEdge(edges, file.packageID, targetID, graph.EdgeImports)
 		}
+	}
 
+	typedFiles, degradedFiles, err := indexGoTypes(
+		ctx, root, modulePath, parsed, g, edges, nodesByQualified, funcPositionIndex, typePositionIndex,
+		functionsByPackage, methodsByPackage, methodsByName,
+	)
+	if err != nil {
+		return nil, err
+	}
+	g.Coverage.DegradedFiles = append(g.Coverage.DegradedFiles, degradedFiles...)
+
+	for _, file := range parsed {
+		if typedFiles[file.rel] {
+			continue
+		}
 		for _, decl := range file.abs.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
 			if !ok || fn.Body == nil {
@@ -272,19 +310,13 @@ func (i *Indexer) Index(ctx context.Context, repoPath string) (*graph.Graph, err
 					return true
 				}
 				targetID, externalQualified, externalName := resolveCall(
-					call.Fun, file.packageQ, file.importPath, functionsByPackage,
+					call.Fun, sourceID, file.packageQ, file.importPath, functionsByPackage,
 					methodsByPackage, methodsByName,
 				)
 				if targetID == "" && externalQualified != "" {
-					target, exists := nodesByQualified[externalQualified]
-					if !exists {
-						target = externalNode(externalQualified, externalName, "call target")
-						nodesByQualified[externalQualified] = target
-						g.Nodes = append(g.Nodes, target)
-					}
-					targetID = target.ID
+					targetID = ensureExternal(g, nodesByQualified, externalQualified, externalName, "call target")
 				}
-				if targetID != "" && targetID != sourceID {
+				if targetID != "" {
 					addEdge(edges, sourceID, targetID, graph.EdgeCalls)
 				}
 				return true
@@ -469,8 +501,24 @@ func functionDetail(fset *token.FileSet, fn *ast.FuncDecl, receiver string) stri
 	return "(" + receiver + ")." + fn.Name.Name + strings.TrimPrefix(signature.String(), "func")
 }
 
+func interfaceMethodDetail(fset *token.FileSet, name string, funcType *ast.FuncType) string {
+	var signature bytes.Buffer
+	if err := format.Node(&signature, fset, funcType); err != nil {
+		return name
+	}
+	return name + strings.TrimPrefix(signature.String(), "func")
+}
+
+// resolveCall resolves a call target using only names (no type information).
+// It is the fallback used for files the type checker could not analyze. When
+// the only name-matched candidate for a selector call is the enclosing
+// function itself, the match is name-only and untrustworthy, so it is
+// reported as an unresolved external call instead of a (likely wrong)
+// self-edge. A plain identifier call that resolves to the same function is
+// genuine, unambiguous recursion and keeps its self-edge.
 func resolveCall(
 	expr ast.Expr,
+	sourceID string,
 	packageQ string,
 	imports map[string]string,
 	functions map[string]map[string]string,
@@ -494,11 +542,11 @@ func resolveCall(
 			}
 		}
 		local := methodsByPackage[packageQ][fun.Sel.Name]
-		if len(local) == 1 {
+		if len(local) == 1 && local[0] != sourceID {
 			return local[0], "", ""
 		}
 		all := methodsByName[fun.Sel.Name]
-		if len(all) == 1 {
+		if len(all) == 1 && all[0] != sourceID {
 			return all[0], "", ""
 		}
 		return "", "method:" + fun.Sel.Name, fun.Sel.Name
@@ -514,9 +562,44 @@ func externalNode(qualified, name, detail string) graph.Node {
 	}
 }
 
+// ensureExternal returns the ID of the existing node registered under
+// qualified, creating an External node for it when none exists yet.
+func ensureExternal(g *graph.Graph, nodesByQualified map[string]graph.Node, qualified, name, detail string) string {
+	if target, exists := nodesByQualified[qualified]; exists {
+		return target.ID
+	}
+	target := externalNode(qualified, name, detail)
+	nodesByQualified[qualified] = target
+	g.Nodes = append(g.Nodes, target)
+	return target.ID
+}
+
 func addEdge(edges map[string]graph.Edge, from, to, kind string) {
 	key := from + "\x00" + kind + "\x00" + to
 	edges[key] = graph.Edge{From: from, To: to, Kind: kind}
+}
+
+// addTypedEdge records an edge proven by the type checker.
+func addTypedEdge(edges map[string]graph.Edge, from, to, kind string) {
+	key := from + "\x00" + kind + "\x00" + to
+	edges[key] = graph.Edge{From: from, To: to, Kind: kind, Resolution: graph.ResolutionTyped}
+}
+
+// positionKey identifies a declaration by its file-relative path and the
+// byte offset of its name identifier. The offset is stable across the
+// indexer's own AST parse and a separate go/packages type-checking pass of
+// the same source text, unlike a line number, which collides whenever two
+// declarations share one line (for example two interface methods declared
+// on a single line).
+func positionKey(rel string, offset int) string {
+	return rel + ":" + strconv.Itoa(offset)
+}
+
+// declOffset returns the byte offset of pos within its file, ignoring any
+// `//line` directive adjustment, so the offset always identifies a position
+// in the real on-disk file regardless of generated-code line remapping.
+func declOffset(fset *token.FileSet, pos token.Pos) int {
+	return fset.PositionFor(pos, false).Offset
 }
 
 func sortGraph(g *graph.Graph) {
@@ -540,6 +623,9 @@ func sortGraph(g *graph.Graph) {
 	})
 	sort.Slice(g.Coverage.SkippedFiles, func(a, b int) bool {
 		return g.Coverage.SkippedFiles[a].File < g.Coverage.SkippedFiles[b].File
+	})
+	sort.Slice(g.Coverage.DegradedFiles, func(a, b int) bool {
+		return g.Coverage.DegradedFiles[a].File < g.Coverage.DegradedFiles[b].File
 	})
 }
 

@@ -22,6 +22,10 @@ type Service struct {
 	store          *store.Store
 	fixedRepo      string
 	fixedWorkspace string
+	// fingerprint computes the source fingerprint for a repository root. It
+	// defaults to indexer.Fingerprint and exists as a seam so tests can wrap
+	// it to count or stub fingerprint computation without touching disk.
+	fingerprint func(ctx context.Context, root string) (string, error)
 }
 
 // NewWorkspace returns a service scoped to a workspace. Repository operations
@@ -31,7 +35,7 @@ func NewWorkspace(workspacePath string) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Service{indexer: indexer.New(), store: store.New(), fixedWorkspace: resolved}, nil
+	return &Service{indexer: indexer.New(), store: store.New(), fixedWorkspace: resolved, fingerprint: indexer.Fingerprint}, nil
 }
 
 // New returns a graph service. When fixedRepo is non-empty, all operations are
@@ -45,7 +49,7 @@ func New(fixedRepo string) (*Service, error) {
 			return nil, err
 		}
 	}
-	return &Service{indexer: indexer.New(), store: store.New(), fixedRepo: resolved}, nil
+	return &Service{indexer: indexer.New(), store: store.New(), fixedRepo: resolved, fingerprint: indexer.Fingerprint}, nil
 }
 
 // IndexResult describes a completed repository index.
@@ -57,16 +61,13 @@ type IndexResult struct {
 
 // Index builds and persists the graph for a repository.
 func (s *Service) Index(ctx context.Context, repoPath string) (IndexResult, error) {
-	repo, err := s.repo(repoPath)
+	repo, err := s.repo(ctx, repoPath)
 	if err != nil {
 		return IndexResult{}, err
 	}
-	value, err := s.indexer.Index(ctx, repo)
+	value, err := s.indexAndSave(ctx, repo)
 	if err != nil {
-		return IndexResult{}, fmt.Errorf("index repository %s: %w", repo, err)
-	}
-	if err := s.store.Save(ctx, value); err != nil {
-		return IndexResult{}, fmt.Errorf("save repository graph %s: %w", repo, err)
+		return IndexResult{}, err
 	}
 	path, err := s.store.Path(repo)
 	if err != nil {
@@ -75,16 +76,46 @@ func (s *Service) Index(ctx context.Context, repoPath string) (IndexResult, erro
 	return IndexResult{Project: value.Summary(), GraphPath: path, Coverage: value.Coverage}, nil
 }
 
+// indexAndSave computes the current source fingerprint, rebuilds the graph,
+// stamps it with that fingerprint, and persists it. Computing the fingerprint
+// before indexing means a file changed mid-index is simply picked up again by
+// the next query, which recomputes and compares fingerprints.
+func (s *Service) indexAndSave(ctx context.Context, repo string) (*graph.Graph, error) {
+	fingerprint, err := s.fingerprint(ctx, repo)
+	if err != nil {
+		return nil, fmt.Errorf("compute source fingerprint for %s: %w", repo, err)
+	}
+	return s.indexAndSaveWithFingerprint(ctx, repo, fingerprint)
+}
+
+// indexAndSaveWithFingerprint rebuilds the graph and persists it using an
+// already-computed source fingerprint, avoiding a second fingerprint
+// computation when the caller resolved staleness moments earlier.
+func (s *Service) indexAndSaveWithFingerprint(ctx context.Context, repo, fingerprint string) (*graph.Graph, error) {
+	value, err := s.indexer.Index(ctx, repo)
+	if err != nil {
+		return nil, fmt.Errorf("index repository %s: %w", repo, err)
+	}
+	value.SourceFingerprint = fingerprint
+	if err := s.store.Save(ctx, value); err != nil {
+		return nil, fmt.Errorf("save repository graph %s: %w", repo, err)
+	}
+	return value, nil
+}
+
 // StatusResult describes a repository-local graph.
 type StatusResult struct {
-	Indexed   bool                  `json:"indexed"`
+	Indexed bool `json:"indexed"`
+	// Stale is true when on-disk source no longer matches the persisted
+	// graph. Status never rebuilds; call a query tool or Index to refresh.
+	Stale     bool                  `json:"stale"`
 	Project   *graph.ProjectSummary `json:"project,omitempty"`
 	GraphPath string                `json:"graph_path"`
 }
 
-// Status reports whether a repository has a graph.
-func (s *Service) Status(repoPath string) (StatusResult, error) {
-	repo, err := s.repo(repoPath)
+// Status reports whether a repository has a graph and whether it is stale.
+func (s *Service) Status(ctx context.Context, repoPath string) (StatusResult, error) {
+	repo, err := s.repo(ctx, repoPath)
 	if err != nil {
 		return StatusResult{}, err
 	}
@@ -99,8 +130,12 @@ func (s *Service) Status(repoPath string) (StatusResult, error) {
 		}
 		return StatusResult{}, err
 	}
+	fingerprint, err := s.fingerprint(ctx, repo)
+	if err != nil {
+		return StatusResult{}, fmt.Errorf("compute source fingerprint for %s: %w", repo, err)
+	}
 	summary := value.Summary()
-	return StatusResult{Indexed: true, Project: &summary, GraphPath: path}, nil
+	return StatusResult{Indexed: true, Stale: fingerprint != value.SourceFingerprint, Project: &summary, GraphPath: path}, nil
 }
 
 // SearchResult contains matching graph nodes.
@@ -111,8 +146,8 @@ type SearchResult struct {
 }
 
 // Search finds nodes by case-insensitive literal text.
-func (s *Service) Search(repoPath, query, kind string, limit int) (SearchResult, error) {
-	value, err := s.load(repoPath)
+func (s *Service) Search(ctx context.Context, repoPath, query, kind string, limit int) (SearchResult, error) {
+	value, err := s.load(ctx, repoPath)
 	if err != nil {
 		return SearchResult{}, err
 	}
@@ -154,8 +189,8 @@ type TraceResult struct {
 }
 
 // Trace traverses matching edges around a symbol.
-func (s *Service) Trace(repoPath, symbol, direction string, depth, limit int, edgeKinds []string) (TraceResult, error) {
-	value, err := s.load(repoPath)
+func (s *Service) Trace(ctx context.Context, repoPath, symbol, direction string, depth, limit int, edgeKinds []string) (TraceResult, error) {
+	value, err := s.load(ctx, repoPath)
 	if err != nil {
 		return TraceResult{}, err
 	}
@@ -292,8 +327,8 @@ type SnippetResult struct {
 }
 
 // Snippet reads a bounded source excerpt for a graph symbol.
-func (s *Service) Snippet(repoPath, symbol string, contextLines int) (SnippetResult, error) {
-	value, err := s.load(repoPath)
+func (s *Service) Snippet(ctx context.Context, repoPath, symbol string, contextLines int) (SnippetResult, error) {
+	value, err := s.load(ctx, repoPath)
 	if err != nil {
 		return SnippetResult{}, err
 	}
@@ -345,8 +380,8 @@ type Degree struct {
 }
 
 // Architecture returns compact structural statistics.
-func (s *Service) Architecture(repoPath string) (ArchitectureResult, error) {
-	value, err := s.load(repoPath)
+func (s *Service) Architecture(ctx context.Context, repoPath string) (ArchitectureResult, error) {
+	value, err := s.load(ctx, repoPath)
 	if err != nil {
 		return ArchitectureResult{}, err
 	}
@@ -385,8 +420,8 @@ type CoverageResult struct {
 }
 
 // Coverage returns the recorded index coverage.
-func (s *Service) Coverage(repoPath string) (CoverageResult, error) {
-	value, err := s.load(repoPath)
+func (s *Service) Coverage(ctx context.Context, repoPath string) (CoverageResult, error) {
+	value, err := s.load(ctx, repoPath)
 	if err != nil {
 		return CoverageResult{}, err
 	}
@@ -412,8 +447,8 @@ type ExpandedEdge struct {
 }
 
 // QueryGraph filters edges by endpoint text and edge kind.
-func (s *Service) QueryGraph(repoPath, from, edgeKind, to string, limit int) (GraphQueryResult, error) {
-	value, err := s.load(repoPath)
+func (s *Service) QueryGraph(ctx context.Context, repoPath, from, edgeKind, to string, limit int) (GraphQueryResult, error) {
+	value, err := s.load(ctx, repoPath)
 	if err != nil {
 		return GraphQueryResult{}, err
 	}
@@ -468,8 +503,8 @@ type SearchCodeResult struct {
 }
 
 // SearchCode searches the currently indexed file set.
-func (s *Service) SearchCode(repoPath, query string, limit int) (SearchCodeResult, error) {
-	value, err := s.load(repoPath)
+func (s *Service) SearchCode(ctx context.Context, repoPath, query string, limit int) (SearchCodeResult, error) {
+	value, err := s.load(ctx, repoPath)
 	if err != nil {
 		return SearchCodeResult{}, err
 	}
@@ -527,7 +562,7 @@ func (s *Service) SearchCode(repoPath, query string, limit int) (SearchCodeResul
 
 // Delete removes a repository's graph.
 func (s *Service) Delete(ctx context.Context, repoPath string) error {
-	repo, err := s.repo(repoPath)
+	repo, err := s.repo(ctx, repoPath)
 	if err != nil {
 		return err
 	}
@@ -537,8 +572,10 @@ func (s *Service) Delete(ctx context.Context, repoPath string) error {
 	return nil
 }
 
-func (s *Service) load(repoPath string) (*graph.Graph, error) {
-	repo, err := s.repo(repoPath)
+// load returns the current graph for repoPath, transparently rebuilding it
+// when the on-disk source no longer matches the persisted graph's fingerprint.
+func (s *Service) load(ctx context.Context, repoPath string) (*graph.Graph, error) {
+	repo, err := s.repo(ctx, repoPath)
 	if err != nil {
 		return nil, err
 	}
@@ -546,10 +583,17 @@ func (s *Service) load(repoPath string) (*graph.Graph, error) {
 	if err != nil {
 		return nil, err
 	}
-	return value, nil
+	fingerprint, err := s.fingerprint(ctx, repo)
+	if err != nil {
+		return nil, fmt.Errorf("compute source fingerprint for %s: %w", repo, err)
+	}
+	if fingerprint == value.SourceFingerprint {
+		return value, nil
+	}
+	return s.indexAndSaveWithFingerprint(ctx, repo, fingerprint)
 }
 
-func (s *Service) repo(requested string) (string, error) {
+func (s *Service) repo(ctx context.Context, requested string) (string, error) {
 	if s.fixedRepo != "" {
 		if requested == "" {
 			return s.fixedRepo, nil
@@ -564,7 +608,7 @@ func (s *Service) repo(requested string) (string, error) {
 		return s.fixedRepo, nil
 	}
 	if s.fixedWorkspace != "" {
-		discovery, err := repository.Discover(context.Background(), s.fixedWorkspace)
+		discovery, err := repository.Discover(ctx, s.fixedWorkspace)
 		if err != nil {
 			return "", err
 		}

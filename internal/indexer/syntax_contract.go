@@ -18,6 +18,9 @@ type syntaxDeclaration struct {
 	Detail    string
 	StartByte uint32
 	EndByte   uint32
+	// Interface marks interface, trait and protocol type declarations so
+	// supertype edges can be classified without parsing Detail.
+	Interface bool
 }
 
 type syntaxImport struct {
@@ -32,10 +35,35 @@ type syntaxCall struct {
 	Constructor bool
 }
 
+// syntaxBinding records one introduction of a receiver name. Field bindings
+// (Local false) describe this.x/self.x members of Container. Local bindings
+// (Local true) describe parameters, local variables and other scoped names and
+// apply to calls in [StartByte, EndByte). An empty Type means the name is
+// introduced without a syntactically known type, which shadows outer bindings.
 type syntaxBinding struct {
 	Container string
 	Field     string
 	Type      string
+	Local     bool
+	StartByte uint32
+	EndByte   uint32
+	// ScopeStart is the start byte of the scope node that owns a Local
+	// binding. Together with EndByte it identifies the variable's scope;
+	// EndByte alone is ambiguous because nested scopes can end on the same byte.
+	ScopeStart uint32
+}
+
+const (
+	syntaxHeritageExtends    = "extends"
+	syntaxHeritageImplements = "implements"
+)
+
+// syntaxHeritage records a supertype named in a type declaration header. Kind
+// is empty when the syntax cannot tell a base class from an interface.
+type syntaxHeritage struct {
+	Type  string
+	Super string
+	Kind  string
 }
 
 type syntaxFacts struct {
@@ -43,6 +71,7 @@ type syntaxFacts struct {
 	Imports      []syntaxImport
 	Calls        []syntaxCall
 	Bindings     []syntaxBinding
+	Heritage     []syntaxHeritage
 }
 
 func parseSyntax(ctx context.Context, language, filename string, src []byte) (syntaxFacts, error) {

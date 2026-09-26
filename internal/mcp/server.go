@@ -123,7 +123,7 @@ func (s *Server) handle(ctx context.Context, message request) (any, *rpcError) {
 				"tools": map[string]any{"listChanged": false},
 			},
 			"serverInfo":   map[string]any{"name": serverName, "version": serverVersion},
-			"instructions": "A shared code graph is available. For coding, debugging, refactoring, review, architecture, symbol location, callers, dependencies, or impact analysis, call prepare_code_context before broad repository exploration and pass the absolute path of the opened workspace as workspace_path. Never infer the workspace from the MCP process working directory because launchers may start the server in a plugin or scratch directory. Then use graph tools as the primary source for structural discovery. Use search_code or grep only for exact literals, unsupported content, coverage gaps, or verification after graph results. Before negative or exhaustive source claims, call check_index_coverage and disclose skipped files. Do not rebuild an existing graph unless source changes make it stale.",
+			"instructions": "A shared code graph is available. For coding, debugging, refactoring, review, architecture, symbol location, callers, dependencies, or impact analysis, call prepare_code_context before broad repository exploration and pass the absolute path of the opened workspace as workspace_path. Never infer the workspace from the MCP process working directory because launchers may start the server in a plugin or scratch directory. Then use graph tools as the primary source for structural discovery. Use search_code or grep only for exact literals, unsupported content, coverage gaps, or verification after graph results. Before negative or exhaustive source claims, call check_index_coverage and disclose skipped files. Every query automatically refreshes any repository whose source changed since it was last indexed, so there is no need to call index_workspace or index_repository again just to pick up edits.",
 		}, nil
 	case "ping":
 		return map[string]any{}, nil
@@ -190,7 +190,7 @@ func (s *Server) callTool(ctx context.Context, params callParams) toolResult {
 	case "index_status":
 		var args repoArgs
 		if err = decodeArgs(params.Arguments, &args); err == nil {
-			value, err = s.service.Status(args.RepoPath)
+			value, err = s.service.Status(ctx, args.RepoPath)
 		}
 	case "list_projects":
 		var args workspaceArgs
@@ -200,52 +200,52 @@ func (s *Server) callTool(ctx context.Context, params callParams) toolResult {
 	case "search_workspace_graph":
 		var args workspaceSearchArgs
 		if err = decodeArgs(params.Arguments, &args); err == nil {
-			value, err = s.service.WorkspaceSearch(args.WorkspacePath, args.Query, args.Kind, args.Limit)
+			value, err = s.service.WorkspaceSearch(ctx, args.WorkspacePath, args.Query, args.Kind, args.Limit)
 		}
 	case "query_workspace_graph":
 		var args workspaceGraphQueryArgs
 		if err = decodeArgs(params.Arguments, &args); err == nil {
-			value, err = s.service.QueryWorkspaceGraph(args.WorkspacePath, args.From, args.Edge, args.To, args.Limit)
+			value, err = s.service.QueryWorkspaceGraph(ctx, args.WorkspacePath, args.From, args.Edge, args.To, args.Limit)
 		}
 	case "get_workspace_architecture":
 		var args workspaceArgs
 		if err = decodeArgs(params.Arguments, &args); err == nil {
-			value, err = s.service.WorkspaceArchitecture(args.WorkspacePath)
+			value, err = s.service.WorkspaceArchitecture(ctx, args.WorkspacePath)
 		}
 	case "search_graph":
 		var args searchArgs
 		if err = decodeArgs(params.Arguments, &args); err == nil {
-			value, err = s.service.Search(args.RepoPath, args.Query, args.Kind, args.Limit)
+			value, err = s.service.Search(ctx, args.RepoPath, args.Query, args.Kind, args.Limit)
 		}
 	case "trace_path":
 		var args traceArgs
 		if err = decodeArgs(params.Arguments, &args); err == nil {
-			value, err = s.service.Trace(args.RepoPath, args.Symbol, args.Direction, args.Depth, args.Limit, args.EdgeKinds)
+			value, err = s.service.Trace(ctx, args.RepoPath, args.Symbol, args.Direction, args.Depth, args.Limit, args.EdgeKinds)
 		}
 	case "get_code_snippet":
 		var args snippetArgs
 		if err = decodeArgs(params.Arguments, &args); err == nil {
-			value, err = s.service.Snippet(args.RepoPath, args.Symbol, args.ContextLines)
+			value, err = s.service.Snippet(ctx, args.RepoPath, args.Symbol, args.ContextLines)
 		}
 	case "get_architecture":
 		var args repoArgs
 		if err = decodeArgs(params.Arguments, &args); err == nil {
-			value, err = s.service.Architecture(args.RepoPath)
+			value, err = s.service.Architecture(ctx, args.RepoPath)
 		}
 	case "check_index_coverage":
 		var args repoArgs
 		if err = decodeArgs(params.Arguments, &args); err == nil {
-			value, err = s.service.Coverage(args.RepoPath)
+			value, err = s.service.Coverage(ctx, args.RepoPath)
 		}
 	case "query_graph":
 		var args graphQueryArgs
 		if err = decodeArgs(params.Arguments, &args); err == nil {
-			value, err = s.service.QueryGraph(args.RepoPath, args.From, args.Edge, args.To, args.Limit)
+			value, err = s.service.QueryGraph(ctx, args.RepoPath, args.From, args.Edge, args.To, args.Limit)
 		}
 	case "search_code":
 		var args codeSearchArgs
 		if err = decodeArgs(params.Arguments, &args); err == nil {
-			value, err = s.service.SearchCode(args.RepoPath, args.Query, args.Limit)
+			value, err = s.service.SearchCode(ctx, args.RepoPath, args.Query, args.Limit)
 		}
 	case "delete_project":
 		var args repoArgs
@@ -424,7 +424,7 @@ func nodeKindProperty() map[string]any {
 }
 
 func edgeKindProperty() map[string]any {
-	return map[string]any{"type": "string", "enum": []string{"CONTAINS", "DEFINES", "IMPORTS", "CALLS", "REFERENCES", "DEPENDS_ON"}}
+	return map[string]any{"type": "string", "enum": []string{"CONTAINS", "DEFINES", "IMPORTS", "CALLS", "REFERENCES", "DEPENDS_ON", "IMPLEMENTS", "EXTENDS"}}
 }
 
 func objectSchema(properties map[string]any, required ...string) map[string]any {

@@ -11,13 +11,17 @@ import (
 	"time"
 
 	"github.com/vladimirgavrilenko/codebase-graph/internal/graph"
+	"github.com/vladimirgavrilenko/codebase-graph/internal/indexer"
 	"github.com/vladimirgavrilenko/codebase-graph/internal/repository"
 )
 
 // RepositoryState reports one repository discovered in a workspace.
 type RepositoryState struct {
-	Path      string                `json:"path"`
-	Indexed   bool                  `json:"indexed"`
+	Path    string `json:"path"`
+	Indexed bool   `json:"indexed"`
+	// Stale is true when on-disk source no longer matches this repository's
+	// persisted graph. Discovery never rebuilds; it only reports the state.
+	Stale     bool                  `json:"stale"`
 	Project   *graph.ProjectSummary `json:"project,omitempty"`
 	GraphPath string                `json:"graph_path"`
 }
@@ -27,13 +31,19 @@ type DiscoveryResult struct {
 	Workspace        string                `json:"workspace"`
 	WorkspaceIndexed bool                  `json:"workspace_indexed"`
 	WorkspaceProject *graph.ProjectSummary `json:"workspace_project,omitempty"`
-	Repositories     []RepositoryState     `json:"repositories"`
-	GraphPath        string                `json:"workspace_graph_path"`
+	// WorkspaceStale is true when the discovered repositories or the
+	// service-host configuration no longer match the aggregate graph.
+	WorkspaceStale bool              `json:"workspace_stale"`
+	Repositories   []RepositoryState `json:"repositories"`
+	GraphPath      string            `json:"workspace_graph_path"`
 }
 
 // CodeContextResult tells an agent how to use the available graph before broad search.
 type CodeContextResult struct {
 	DiscoveryResult
+	// Refreshed is true when a stale indexed workspace was rebuilt as part
+	// of preparing this context.
+	Refreshed       bool     `json:"refreshed"`
 	RecommendedNext []string `json:"recommended_next"`
 }
 
@@ -45,45 +55,82 @@ type WorkspaceIndexResult struct {
 	CrossRepositoryEdges int                  `json:"cross_repository_edges"`
 }
 
-// DiscoverRepositories finds repository boundaries without modifying indexes.
-func (s *Service) DiscoverRepositories(ctx context.Context, workspacePath string) (DiscoveryResult, error) {
-	workspace, err := s.workspace(workspacePath)
+// resolveWorkspaceState discovers repository boundaries for a workspace and
+// resolves each discovered repository's staleness exactly once. Every caller
+// that needs both facts for a single request must go through this helper
+// instead of calling repository.Discover or resolveWorkspaceRepositories
+// directly, so each is computed at most once per request.
+func (s *Service) resolveWorkspaceState(ctx context.Context, requested string) (string, []workspaceRepoResolution, error) {
+	workspace, err := s.workspace(requested)
 	if err != nil {
-		return DiscoveryResult{}, err
+		return "", nil, err
 	}
 	discovery, err := repository.Discover(ctx, workspace)
 	if err != nil {
-		return DiscoveryResult{}, err
+		return "", nil, err
 	}
+	resolutions, err := s.resolveWorkspaceRepositories(ctx, discovery.Repositories)
+	if err != nil {
+		return "", nil, err
+	}
+	return workspace, resolutions, nil
+}
+
+// buildDiscoveryResult assembles a DiscoveryResult from already-resolved
+// repository state. It performs no repository.Discover or Fingerprint calls.
+func (s *Service) buildDiscoveryResult(workspace string, resolutions []workspaceRepoResolution) (DiscoveryResult, error) {
 	result := DiscoveryResult{Workspace: workspace}
+	var err error
 	result.GraphPath, err = s.store.WorkspacePath(workspace)
 	if err != nil {
 		return DiscoveryResult{}, err
 	}
-	if value, loadErr := s.store.LoadWorkspace(workspace); loadErr == nil {
-		summary := value.Summary()
+
+	if workspaceGraph, loadErr := s.store.LoadWorkspace(workspace); loadErr == nil {
+		summary := workspaceGraph.Summary()
 		result.WorkspaceIndexed = true
 		result.WorkspaceProject = &summary
+		result.WorkspaceStale, err = workspaceIsStale(workspace, resolutions, workspaceGraph)
+		if err != nil {
+			return DiscoveryResult{}, err
+		}
 	}
-	for _, repo := range discovery.Repositories {
-		path, pathErr := s.store.Path(repo)
+
+	for _, resolution := range resolutions {
+		path, pathErr := s.store.Path(resolution.repo)
 		if pathErr != nil {
 			return DiscoveryResult{}, pathErr
 		}
-		state := RepositoryState{Path: repo, GraphPath: path}
-		if value, loadErr := s.store.Load(repo); loadErr == nil {
-			summary := value.Summary()
+		state := RepositoryState{Path: resolution.repo, GraphPath: path}
+		if resolution.graph != nil {
+			summary := resolution.graph.Summary()
 			state.Indexed = true
 			state.Project = &summary
+			state.Stale = !resolution.current
 		}
 		result.Repositories = append(result.Repositories, state)
 	}
 	return result, nil
 }
 
+// DiscoverRepositories finds repository boundaries without modifying indexes.
+func (s *Service) DiscoverRepositories(ctx context.Context, workspacePath string) (DiscoveryResult, error) {
+	workspace, resolutions, err := s.resolveWorkspaceState(ctx, workspacePath)
+	if err != nil {
+		return DiscoveryResult{}, err
+	}
+	return s.buildDiscoveryResult(workspace, resolutions)
+}
+
 // PrepareCodeContext reports graph availability and the preferred next tool calls.
+// A stale indexed workspace is refreshed in place before recommendations are
+// returned, so callers never act on a graph known to be out of date.
 func (s *Service) PrepareCodeContext(ctx context.Context, workspacePath string) (CodeContextResult, error) {
-	discovery, err := s.DiscoverRepositories(ctx, workspacePath)
+	workspace, resolutions, err := s.resolveWorkspaceState(ctx, workspacePath)
+	if err != nil {
+		return CodeContextResult{}, err
+	}
+	discovery, err := s.buildDiscoveryResult(workspace, resolutions)
 	if err != nil {
 		return CodeContextResult{}, err
 	}
@@ -94,6 +141,17 @@ func (s *Service) PrepareCodeContext(ctx context.Context, workspacePath string) 
 			"use grep only when indexing is unavailable or the task is an exact literal search",
 		}
 		return result, nil
+	}
+	if discovery.WorkspaceStale {
+		_, refreshedResolutions, err := s.rebuildWorkspace(ctx, workspace, resolutions)
+		if err != nil {
+			return CodeContextResult{}, err
+		}
+		result.Refreshed = true
+		result.DiscoveryResult, err = s.buildDiscoveryResult(workspace, refreshedResolutions)
+		if err != nil {
+			return CodeContextResult{}, err
+		}
 	}
 	result.RecommendedNext = []string{
 		"use search_workspace_graph to locate repositories, files, and symbols",
@@ -121,12 +179,9 @@ func (s *Service) IndexWorkspace(ctx context.Context, workspacePath string) (Wor
 	graphs := make([]*graph.Graph, 0, len(discovery.Repositories))
 	result := WorkspaceIndexResult{}
 	for _, repo := range discovery.Repositories {
-		value, indexErr := s.indexer.Index(ctx, repo)
+		value, indexErr := s.indexAndSave(ctx, repo)
 		if indexErr != nil {
-			return WorkspaceIndexResult{}, fmt.Errorf("index repository %s: %w", repo, indexErr)
-		}
-		if saveErr := s.store.Save(ctx, value); saveErr != nil {
-			return WorkspaceIndexResult{}, fmt.Errorf("save repository graph %s: %w", repo, saveErr)
+			return WorkspaceIndexResult{}, indexErr
 		}
 		path, pathErr := s.store.Path(repo)
 		if pathErr != nil {
@@ -153,8 +208,8 @@ func (s *Service) IndexWorkspace(ctx context.Context, workspacePath string) (Wor
 }
 
 // WorkspaceSearch searches the aggregate graph.
-func (s *Service) WorkspaceSearch(workspacePath, query, kind string, limit int) (SearchResult, error) {
-	value, err := s.loadWorkspace(workspacePath)
+func (s *Service) WorkspaceSearch(ctx context.Context, workspacePath, query, kind string, limit int) (SearchResult, error) {
+	value, err := s.loadWorkspace(ctx, workspacePath)
 	if err != nil {
 		return SearchResult{}, err
 	}
@@ -182,8 +237,8 @@ func (s *Service) WorkspaceSearch(workspacePath, query, kind string, limit int) 
 }
 
 // QueryWorkspaceGraph filters relationships in the aggregate graph.
-func (s *Service) QueryWorkspaceGraph(workspacePath, from, edgeKind, to string, limit int) (GraphQueryResult, error) {
-	value, err := s.loadWorkspace(workspacePath)
+func (s *Service) QueryWorkspaceGraph(ctx context.Context, workspacePath, from, edgeKind, to string, limit int) (GraphQueryResult, error) {
+	value, err := s.loadWorkspace(ctx, workspacePath)
 	if err != nil {
 		return GraphQueryResult{}, err
 	}
@@ -191,20 +246,160 @@ func (s *Service) QueryWorkspaceGraph(workspacePath, from, edgeKind, to string, 
 }
 
 // WorkspaceArchitecture summarizes the aggregate graph.
-func (s *Service) WorkspaceArchitecture(workspacePath string) (ArchitectureResult, error) {
-	value, err := s.loadWorkspace(workspacePath)
+func (s *Service) WorkspaceArchitecture(ctx context.Context, workspacePath string) (ArchitectureResult, error) {
+	value, err := s.loadWorkspace(ctx, workspacePath)
 	if err != nil {
 		return ArchitectureResult{}, err
 	}
 	return architectureValue(value), nil
 }
 
-func (s *Service) loadWorkspace(requested string) (*graph.Graph, error) {
-	workspace, err := s.workspace(requested)
+// workspaceRepoResolution reports, for one discovered repository, whether its
+// persisted graph exists and still matches the current on-disk source.
+type workspaceRepoResolution struct {
+	repo    string
+	graph   *graph.Graph // nil only when the repository has never been indexed
+	current bool
+	// fingerprint and hasFingerprint carry the already-computed source
+	// fingerprint (when the repository has a persisted graph), so a rebuild
+	// triggered later in the same request can reuse it instead of computing
+	// it again.
+	fingerprint    string
+	hasFingerprint bool
+}
+
+// resolveWorkspaceRepositories loads each discovered repository's own graph
+// and compares it against the live source fingerprint, without rebuilding
+// anything. Callers decide whether to act on the result.
+func (s *Service) resolveWorkspaceRepositories(ctx context.Context, discovered []string) ([]workspaceRepoResolution, error) {
+	resolutions := make([]workspaceRepoResolution, 0, len(discovered))
+	for _, repo := range discovered {
+		value, err := s.store.Load(repo)
+		if err != nil {
+			resolutions = append(resolutions, workspaceRepoResolution{repo: repo})
+			continue
+		}
+		fingerprint, err := s.fingerprint(ctx, repo)
+		if err != nil {
+			return nil, fmt.Errorf("compute source fingerprint for %s: %w", repo, err)
+		}
+		resolutions = append(resolutions, workspaceRepoResolution{
+			repo: repo, graph: value, current: fingerprint == value.SourceFingerprint,
+			fingerprint: fingerprint, hasFingerprint: true,
+		})
+	}
+	return resolutions, nil
+}
+
+// rebuildWorkspace rebuilds only the repositories whose resolution is not
+// current, re-aggregates, and persists the result. Repositories with an
+// already-computed fingerprint reuse it instead of recomputing, so no
+// repository's Fingerprint is computed more than once per request. It
+// returns the updated per-repository resolutions (all current) alongside the
+// aggregate graph so callers can report fresh state without recomputing.
+func (s *Service) rebuildWorkspace(ctx context.Context, workspace string, resolutions []workspaceRepoResolution) (*graph.Graph, []workspaceRepoResolution, error) {
+	graphs := make([]*graph.Graph, 0, len(resolutions))
+	updated := make([]workspaceRepoResolution, len(resolutions))
+	for i, resolution := range resolutions {
+		if resolution.graph != nil && resolution.current {
+			graphs = append(graphs, resolution.graph)
+			updated[i] = resolution
+			continue
+		}
+		var rebuilt *graph.Graph
+		var err error
+		if resolution.hasFingerprint {
+			rebuilt, err = s.indexAndSaveWithFingerprint(ctx, resolution.repo, resolution.fingerprint)
+		} else {
+			rebuilt, err = s.indexAndSave(ctx, resolution.repo)
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		graphs = append(graphs, rebuilt)
+		updated[i] = workspaceRepoResolution{
+			repo: resolution.repo, graph: rebuilt, current: true,
+			fingerprint: rebuilt.SourceFingerprint, hasFingerprint: true,
+		}
+	}
+
+	aggregate, _, err := aggregateWorkspace(workspace, graphs)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := s.store.SaveWorkspace(ctx, aggregate); err != nil {
+		return nil, nil, fmt.Errorf("save workspace graph %s: %w", workspace, err)
+	}
+	return aggregate, updated, nil
+}
+
+// workspaceIsStale reports whether an aggregate graph must be rebuilt: any
+// discovered repository is missing or changed since it was last indexed, or
+// the resolved repository set together with the service-host configuration
+// no longer hashes to the aggregate graph's recorded fingerprint.
+func workspaceIsStale(workspace string, resolutions []workspaceRepoResolution, stored *graph.Graph) (bool, error) {
+	freshGraphs := make([]*graph.Graph, 0, len(resolutions))
+	for _, resolution := range resolutions {
+		if resolution.graph == nil || !resolution.current {
+			return true, nil
+		}
+		freshGraphs = append(freshGraphs, resolution.graph)
+	}
+	expected, err := workspaceFingerprint(workspace, freshGraphs)
+	if err != nil {
+		return false, err
+	}
+	return expected != stored.SourceFingerprint, nil
+}
+
+// workspaceFingerprint hashes the repository graphs actually aggregated
+// together with the service-host configuration file, so a repository being
+// added or removed, or the host mapping changing, is always detected even
+// when no individual repository's own source changed.
+func workspaceFingerprint(workspace string, repositories []*graph.Graph) (string, error) {
+	lines := make([]string, 0, len(repositories)+1)
+	for _, repositoryGraph := range repositories {
+		lines = append(lines, repositoryGraph.Root+"\t"+repositoryGraph.SourceFingerprint)
+	}
+	hostLine, err := indexer.EntryLine(workspace, filepath.Join(workspace, serviceHostsFile))
+	if err != nil {
+		return "", fmt.Errorf("compute service host fingerprint for %s: %w", workspace, err)
+	}
+	lines = append(lines, hostLine)
+	sort.Strings(lines)
+	hasher := sha256.New()
+	for _, line := range lines {
+		hasher.Write([]byte(line))
+		hasher.Write([]byte("\n"))
+	}
+	return hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+// loadWorkspace returns the current aggregate graph for workspacePath,
+// rebuilding only the repositories whose source changed and re-aggregating
+// when the workspace as a whole is stale.
+func (s *Service) loadWorkspace(ctx context.Context, requested string) (*graph.Graph, error) {
+	workspace, resolutions, err := s.resolveWorkspaceState(ctx, requested)
 	if err != nil {
 		return nil, err
 	}
-	return s.store.LoadWorkspace(workspace)
+	if len(resolutions) == 0 {
+		return nil, fmt.Errorf("workspace %s contains no repositories", workspace)
+	}
+	value, err := s.store.LoadWorkspace(workspace)
+	if err != nil {
+		return nil, err
+	}
+	stale, err := workspaceIsStale(workspace, resolutions, value)
+	if err != nil {
+		return nil, err
+	}
+	if !stale {
+		return value, nil
+	}
+
+	aggregate, _, err := s.rebuildWorkspace(ctx, workspace, resolutions)
+	return aggregate, err
 }
 
 func (s *Service) workspace(requested string) (string, error) {
@@ -331,6 +526,11 @@ func aggregateWorkspace(workspace string, repositories []*graph.Graph) (*graph.G
 		return result.Nodes[a].ID < result.Nodes[b].ID
 	})
 	sort.Slice(result.Edges, func(a, b int) bool { return edgeKey(result.Edges[a]) < edgeKey(result.Edges[b]) })
+	fingerprint, err := workspaceFingerprint(workspace, repositories)
+	if err != nil {
+		return nil, 0, err
+	}
+	result.SourceFingerprint = fingerprint
 	return result, crossEdges, nil
 }
 
